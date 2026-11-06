@@ -97,6 +97,39 @@ def test_busca_mostra_instrucao_de_datas(janela):
     assert aba.dica_datas.master.cget("text") == "Datas e mudanças de etapa"     # junto dos campos
 
 
+def test_busca_campos_de_etapa_com_lista(janela, dados):
+    import json
+    from tkinter import ttk
+    from ferramentas1doc import busca_argv
+    with open(dados["dados"] / "1doc_cache.json", "w", encoding="utf-8") as f:
+        json.dump({"versao": "1.1", "det": {"3|1/2026": {"etapas_quadro": ["Elaboração do ETP", "Etapa Final"]}}},
+                  f)
+    aba = janela.abas[1]
+    assert set(aba.combos_etapa) == set(busca_argv.CAMPOS_ETAPA)
+    for chave, cb in aba.combos_etapa.items():
+        assert isinstance(cb, ttk.Combobox) and str(cb["state"]) != "readonly"   # aceita digitar
+        assert str(cb.cget("textvariable")) == str(aba.v[chave])
+
+    def escolher(cb, nome):                 # como o Tk faz: abre a lista, troca o valor, avisa
+        cb.tk.call(cb.cget("postcommand"))
+        assert nome in cb["values"]
+        cb.set(nome)
+        cb.event_generate("<<ComboboxSelected>>")
+
+    cb = aba.combos_etapa["etapa"]
+    escolher(cb, "Pesquisa de Mercado")
+    assert aba.v["etapa"].get() == "Pesquisa de Mercado"
+    cb.set("Pesquisa de Mercado; ")
+    escolher(cb, "Elaboração do ETP")        # etapa vinda do cache
+    assert aba.v["etapa"].get() == "Pesquisa de Mercado; Elaboração do ETP"
+    escolher(aba.combos_etapa["antes_de"], "Pesquisa de Mercado")
+    form = aba.formulario()
+    assert form["etapa"] == "Pesquisa de Mercado; Elaboração do ETP"
+    assert form["antes_de"] == "Pesquisa de Mercado"
+    for c in aba.combos_etapa.values():
+        c.set("")
+
+
 def test_busca_com_formulario_invalido(janela):
     aba = janela.abas[1]
     for v in aba.caixas.values():

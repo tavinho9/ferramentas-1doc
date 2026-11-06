@@ -9,6 +9,7 @@ import os
 import tkinter as tk
 from datetime import date, datetime, timedelta
 from tkinter import filedialog, ttk
+from tkinter import font as tkfont
 
 from .. import busca_argv, caminhos, config
 from .secundaria import JanelaSecundaria, abrir_unica
@@ -120,8 +121,12 @@ class AbaBusca(ttk.Frame):
         _descricao(self, "Busca nas caixas do setor por etapa, fase, datas e mudanças de etapa. Gera uma "
                          "planilha com as abas Resultado, Transições e Parâmetros. Textos: sem diferença de "
                          "maiúsculas e acentos, \"contém\"; vários valores num campo, separados por ';', "
-                         "valem como OU. Ex.: \"Ainda não chegou a\" = Pesquisa de Mercado.")
+                         "valem como OU. Etapas: escolha na lista (ou digite parte do nome); para juntar "
+                         "outra, digite ';' depois da primeira e escolha de novo. A lista traz o fluxo da "
+                         "Abertura e as etapas que as buscas já encontraram.")
         self.v = {}
+        self.combos_etapa = {}
+        self._texto_antes = {}
         self.janela_ajuda = None
         corpo = ttk.Frame(self)
         corpo.pack(fill="both", expand=True, padx=12)
@@ -144,17 +149,17 @@ class AbaBusca(ttk.Frame):
         # Etapa e posição
         e = ttk.LabelFrame(corpo, text="Etapa e posição")
         e.grid(row=1, column=0, sticky="nsew", pady=4, padx=(0, 6))
-        self._campo(e, 0, 0, "etapa", "Etapa atual contém:", 24)
+        self._campo_etapa(e, 0, 0, "etapa", "Etapa atual contém:", 24)
         self.v["etapa_exata"] = tk.BooleanVar()
         ttk.Checkbutton(e, text="nome exato", variable=self.v["etapa_exata"]).grid(row=0, column=2, sticky="w")
-        self._campo(e, 1, 0, "excluir_etapa", "Exceto a etapa:", 24)
+        self._campo_etapa(e, 1, 0, "excluir_etapa", "Exceto a etapa:", 24)
         ttk.Label(e, text="Fase:").grid(row=2, column=0, sticky="w", padx=8, pady=2)
         self.v["fase"] = tk.StringVar()
         ttk.Combobox(e, textvariable=self.v["fase"], values=("", "Elaboração", "Abertura"), width=14,
                      state="readonly").grid(row=2, column=1, sticky="w")
-        self._campo(e, 3, 0, "antes_de", "Ainda não chegou a:", 24)
-        self._campo(e, 4, 0, "a_partir_de", "Já chegou a:", 24)
-        self._campo(e, 5, 0, "passou_por", "Já passou por:", 24)
+        self._campo_etapa(e, 3, 0, "antes_de", "Ainda não chegou a:", 24)
+        self._campo_etapa(e, 4, 0, "a_partir_de", "Já chegou a:", 24)
+        self._campo_etapa(e, 5, 0, "passou_por", "Já passou por:", 24)
         self._campo(e, 6, 0, "dias_etapa_min", "Dias na etapa, mín.:", 6)
         self._campo(e, 7, 0, "dias_etapa_max", "Dias na etapa, máx.:", 6)
 
@@ -165,8 +170,8 @@ class AbaBusca(ttk.Frame):
         self._campo(d, 0, 2, "emissao_ate", "até:", 11)
         self._campo(d, 1, 0, "mudanca_de", "Mudou de etapa de:", 11)
         self._campo(d, 1, 2, "mudanca_ate", "até:", 11)
-        self._campo(d, 2, 0, "mudanca_para", "…para a etapa:", 24, span=3)
-        self._campo(d, 3, 0, "mudanca_origem", "…saindo da etapa:", 24, span=3)
+        self._campo_etapa(d, 2, 0, "mudanca_para", "…para a etapa:", 24, span=3)
+        self._campo_etapa(d, 3, 0, "mudanca_origem", "…saindo da etapa:", 24, span=3)
         self._campo(d, 4, 0, "entrada_de", "Entrou na etapa atual de:", 11)
         self._campo(d, 4, 2, "entrada_ate", "até:", 11)
         self._campo(d, 5, 0, "sem_mov_min", "Parado há (dias), mín.:", 6)
@@ -204,6 +209,38 @@ class AbaBusca(ttk.Frame):
         if dica:
             ttk.Label(pai, text=dica, foreground="#777").grid(row=linha, column=coluna + 1 + span,
                                                              sticky="w", padx=6)
+
+    def _campo_etapa(self, pai, linha, coluna, chave, rotulo, largura, span=1):
+        """Campo de etapa: lista suspensa com as etapas conhecidas, que também
+        aceita texto digitado (parte do nome, vários separados por ';')."""
+        ttk.Label(pai, text=rotulo).grid(row=linha, column=coluna, sticky="w", padx=(8, 4), pady=2)
+        self.v[chave] = tk.StringVar()
+        cb = ttk.Combobox(pai, textvariable=self.v[chave], width=largura, height=20, style="Etapa.TCombobox")
+        cb.configure(postcommand=lambda: self._abrir_etapas(cb))
+        cb.bind("<<ComboboxSelected>>", lambda _e: self._escolheu_etapa(cb, chave))
+        for ev in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+            cb.bind(ev, lambda _e: "break")       # a roda do mouse não troca a etapa sem querer
+        cb.grid(row=linha, column=coluna + 1, columnspan=span, sticky="w", pady=2)
+        self.combos_etapa[chave] = cb
+
+    def _abrir_etapas(self, cb):
+        """Ao abrir a lista: guarda o texto do campo (para juntar etapas) e
+        atualiza as opções, que crescem a cada busca."""
+        self._texto_antes[str(cb)] = cb.get()
+        etapas = busca_argv.etapas_conhecidas()
+        cb["values"] = etapas
+        # A lista aberta tem a largura do campo; alarga para o nome mais comprido
+        # caber (com a barra de rolagem), sem passar da borda da tela.
+        fonte = tkfont.nametofont("TkTextFont")
+        extra = max(0, max((fonte.measure(n) for n in etapas), default=0) + 32 - cb.winfo_width())
+        dx = min(0, cb.winfo_screenwidth() - (cb.winfo_rootx() + cb.winfo_width() + extra))
+        ttk.Style(cb).configure("Etapa.TCombobox", postoffset=(dx, 0, extra, 0))
+
+    def _escolheu_etapa(self, cb, chave):
+        antes = self._texto_antes.pop(str(cb), "")
+        cb.set(busca_argv.juntar_etapa(antes, cb.get(), varios=chave in busca_argv.TEXTOS_MULTIPLOS))
+        cb.selection_clear()
+        cb.icursor("end")
 
     def _escolher_numeros(self):
         c = filedialog.askopenfilename(title="Arquivo com números de processo",

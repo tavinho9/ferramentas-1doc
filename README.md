@@ -50,7 +50,15 @@ do Windows → Aplicativos → Ferramentas 1Doc → Desinstalar.
 4. A planilha sai na pasta configurada (padrão: Área de Trabalho) e abre no
    Excel ao terminar. Isso pode ser desligado em **Configurações**.
 
-Na aba **Busca**, os filtros mais usados têm campo próprio. Os demais (por
+Na aba **Busca**, os campos de etapa (*Etapa atual contém*, *Exceto a etapa*,
+*Ainda não chegou a*, *Já chegou a*, *Já passou por*, *…para a etapa*,
+*…saindo da etapa*) têm uma lista para escolher a etapa sem digitar. A lista
+traz o fluxo da Abertura e as etapas dos quadros que as buscas anteriores já
+leram, então cresce com o uso. Ainda dá para digitar parte do nome. Para juntar
+mais de uma etapa no mesmo campo, digite `;` depois da primeira e escolha a
+próxima na lista.
+
+Os filtros mais usados têm campo próprio. Os demais (por
 exemplo `--setor-etapa`, `--cita-setor`, `--ordenar`) vão em **Outras
 opções**, no mesmo formato da linha de comando. **Ver todas as opções…**
 mostra a lista completa. As datas, explicadas no próprio quadro de datas,

@@ -1,5 +1,6 @@
 """Funções puras: datas, critérios de etapa, formulário da busca, log."""
 
+import json
 from datetime import date, datetime
 
 import pytest
@@ -78,6 +79,54 @@ def test_instrucao_de_datas_da_busca():
         assert formato in busca_argv.DICA_DATAS
     # a instrução pede o ano completo: sem ele, a busca recusa
     assert "data inválida" in busca_argv.validar(["--emissao-de", "05/11"])
+
+
+ELABORACAO = ["Elaboração do DFD", "Elaboração do ETP", "Etapa Final"]
+
+
+def test_ordenar_etapas():
+    base = list(busca_argv.ETAPAS_BASE)
+    assert busca_argv.ordenar_etapas([]) == base
+    abertura_lida = [n.upper() if n == "Aprovação do COMPAC" else n for n in base]
+    abertura_lida[0] = "Validacao de  requisicao"              # grafia diferente, mesma etapa
+    etapas = busca_argv.ordenar_etapas([ELABORACAO, abertura_lida])
+    # o fluxo da Abertura primeiro, na ordem e com a grafia lida; depois as outras, sem repetir
+    assert etapas == ["Validacao de  requisicao", *base[1:5], "APROVAÇÃO DO COMPAC", "Etapa Final",
+                      "Elaboração do DFD", "Elaboração do ETP"]
+
+
+def test_etapas_conhecidas_do_cache(tmp_path):
+    arq = tmp_path / "1doc_cache.json"
+    assert busca_argv.etapas_conhecidas(str(arq)) == list(busca_argv.ETAPAS_BASE)      # sem cache
+    arq.write_text("{ quebrado", encoding="utf-8")
+    assert busca_argv.etapas_conhecidas(str(arq)) == list(busca_argv.ETAPAS_BASE)
+    det = {"3|1/2026": {"etapas_quadro": ELABORACAO}, "3|2/2026": {"etapas_quadro": ELABORACAO},
+           "3|3/2026": {"etapas_quadro": []}, "3|4/2026": {"numero": "sem quadro"}}
+    arq.write_text(json.dumps({"versao": "1.1", "det": det}), encoding="utf-8")
+    assert busca_argv.etapas_conhecidas(str(arq))[-2:] == ["Elaboração do DFD", "Elaboração do ETP"]
+    det["3|5/2026"] = {"etapas_quadro": ["Análise Jurídica", "Etapa Final"]}       # uma busca nova
+    arq.write_text(json.dumps({"versao": "1.1", "det": det}), encoding="utf-8")
+    assert busca_argv.etapas_conhecidas(str(arq))[-1] == "Análise Jurídica"
+
+
+@pytest.mark.parametrize("antes,escolhida,varios,esperado", [
+    ("", "Pesquisa de Mercado", True, "Pesquisa de Mercado"),
+    ("Pesquisa", "Pesquisa de Mercado", True, "Pesquisa de Mercado"),               # substitui
+    ("Pesquisa de Mercado;", "Consulta Orçamentária", True, "Pesquisa de Mercado; Consulta Orçamentária"),
+    ("Pesquisa de Mercado; ", "pesquisa de mercado", True, "Pesquisa de Mercado"),  # não repete
+    ("Pesquisa de Mercado;", "Consulta Orçamentária", False, "Consulta Orçamentária"),  # campo de uma só
+])
+def test_juntar_etapa(antes, escolhida, varios, esperado):
+    assert busca_argv.juntar_etapa(antes, escolhida, varios) == esperado
+
+
+def test_campos_de_etapa_viram_opcoes_da_busca():
+    for campo in busca_argv.CAMPOS_ETAPA:
+        assert campo in busca_argv.TEXTOS or campo in busca_argv.TEXTOS_MULTIPLOS
+    argv = busca_argv.montar_argv({"caixas": ["entrada"], "etapa": "Pesquisa de Mercado; Consulta Orçamentária",
+                                   "antes_de": "Pesquisa de Mercado"})
+    assert argv[2:] == ["--antes-de", "Pesquisa de Mercado", "--etapa", "Pesquisa de Mercado",
+                        "--etapa", "Consulta Orçamentária"]
 
 
 def test_montar_argv_erros():
