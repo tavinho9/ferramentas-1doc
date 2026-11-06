@@ -3,7 +3,7 @@
 import os
 import sys
 import time
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 
@@ -95,6 +95,42 @@ def test_busca_com_formulario_invalido(janela):
         v.set(False)
     janela._executar(aba)
     assert janela.executando is None and "caixa" in janela.avisos[0][1]
+
+
+def test_faltantes_periodo_invalido_avisa_sem_executar(janela):
+    aba = janela.abas[2]
+    aba.de.set("31/02/2026")
+    assert "não reconhecida" in aba.leitura.cget("text")          # aviso ao digitar
+    janela._executar(aba)
+    assert janela.executando is None
+    assert janela.avisos and "Data inicial não reconhecida" in janela.avisos[0][1]
+
+
+def test_faltantes_periodo_vai_para_a_execucao_e_fica_salvo(janela, dados, cred, monkeypatch):
+    from openpyxl import Workbook
+    from ferramentas1doc import config, faltantes
+    planilha = str(dados["dados"] / "acomp.xlsx")
+    Workbook().save(planilha)
+    chamadas = []
+    monkeypatch.setattr(faltantes, "executar", lambda *a, **k: chamadas.append((a, k)))
+    aba = janela.abas[2]
+    aba.planilha.set(planilha)
+    aba.de.set("-30")
+    aba.ate.set("ontem")
+    hoje = date.today()
+    assert aba.leitura.cget("text") == (f"→ de {hoje - timedelta(days=30):%d/%m/%Y} "
+                                        f"até {hoje - timedelta(days=1):%d/%m/%Y}")
+    _titulo, funcao, precisa_sessao = aba.tarefa()
+    funcao(cred)
+    assert precisa_sessao and chamadas[0][1] == {"de": hoje - timedelta(days=30), "ate": hoje - timedelta(days=1)}
+    cfg = config.carregar()
+    assert (cfg["faltantes_de"], cfg["faltantes_ate"]) == ("-30", "ontem")      # como digitado
+
+    aba.de.set("")                                                  # vazio = padrão
+    aba.ate.set("")
+    assert aba.leitura.cget("text").startswith("→ de 1º/jan do ano mais antigo da planilha até hoje")
+    aba.tarefa()[1](cred)
+    assert chamadas[1][1] == {"de": None, "ate": None}
 
 
 def _processar(j, vezes=6):

@@ -266,7 +266,7 @@ class _AbaPlanilha(ttk.Frame):
     def __init__(self, pai, descricao):
         super().__init__(pai)
         _descricao(self, descricao)
-        f = ttk.Frame(self)
+        self.campos = f = ttk.Frame(self)
         f.pack(fill="x", padx=12, pady=6)
         ttk.Label(f, text="Planilha:").grid(row=0, column=0, sticky="w")
         self.planilha = tk.StringVar(value=config.carregar().get(self.chave_config, ""))
@@ -322,15 +322,54 @@ class AbaFaltantes(_AbaPlanilha):
 
     def __init__(self, pai):
         super().__init__(pai, "Procura, nas caixas do setor, os Proc. Administrativos de abertura, fase "
-                              "preparatória ou elaboração que estão ANTES da Pesquisa de Mercado e não estão "
-                              "na planilha de acompanhamento. Gera <planilha>_faltantes_….xlsx (a original "
-                              "não é alterada), com a aba \"Cancelados (conferir)\" quando houver. A 1ª "
-                              "execução lê os arquivados e demora; as seguintes usam o cache.")
+                              "preparatória ou elaboração emitidos no período que estão ANTES da Pesquisa de "
+                              "Mercado e não estão na planilha de acompanhamento. Gera "
+                              "<planilha>_faltantes_….xlsx (a original não é alterada), com a aba "
+                              "\"Cancelados (conferir)\" quando houver. A 1ª execução lê os arquivados e "
+                              "demora; as seguintes usam o cache.")
+        from .. import faltantes
+        self.mod = faltantes
+        cfg = config.carregar()
+        ttk.Label(self.campos, text="Emitidos de:").grid(row=2, column=0, sticky="w")
+        p = ttk.Frame(self.campos)
+        p.grid(row=2, column=1, columnspan=2, padx=6, sticky="w")
+        self.de = tk.StringVar(value=cfg["faltantes_de"])
+        ttk.Entry(p, textvariable=self.de, width=12).pack(side="left")
+        ttk.Label(p, text="até:").pack(side="left", padx=(10, 6))
+        self.ate = tk.StringVar(value=cfg["faltantes_ate"])
+        ttk.Entry(p, textvariable=self.ate, width=12).pack(side="left")
+        ttk.Button(p, text="Padrão", width=8,
+                   command=lambda: (self.de.set(""), self.ate.set(""))).pack(side="left", padx=(10, 0))
+        self.leitura = ttk.Label(p, foreground="#555")
+        self.leitura.pack(side="left", padx=10)
+        ttk.Label(self.campos, text=f"{faltantes.FORMATOS_DATA}; vazio = padrão",
+                  foreground="#777").grid(row=3, column=1, columnspan=2, sticky="w", padx=6)
+        for v in (self.de, self.ate):
+            v.trace_add("write", lambda *_: self._mostrar_periodo())
+        self._mostrar_periodo()
+
+    def _mostrar_periodo(self):
+        hoje = date.today()
+        try:
+            de, ate = self.mod.ler_periodo(self.de.get(), self.ate.get(), hoje)
+        except ValueError as e:
+            self.leitura.config(text=str(e), foreground="#b00020")
+            return
+        inicio = f"{de:%d/%m/%Y}" if de else "1º/jan do ano mais antigo da planilha"
+        fim = f"{ate:%d/%m/%Y}" if ate and ate < hoje else f"hoje ({hoje:%d/%m/%Y})"
+        self.leitura.config(text=f"→ de {inicio} até {fim}", foreground="#555")
 
     def tarefa(self):
-        from .. import faltantes
+        try:
+            de, ate = self.mod.ler_periodo(self.de.get(), self.ate.get())
+        except ValueError as e:
+            raise FormularioInvalido(str(e)) from None
         caminho, aba = self._validar()
-        return ("Faltantes na planilha", lambda cred: faltantes.executar(caminho, aba, cred), True)
+        cfg = config.carregar()
+        cfg["faltantes_de"], cfg["faltantes_ate"] = self.de.get().strip(), self.ate.get().strip()
+        config.salvar(cfg)
+        return ("Faltantes na planilha",
+                lambda cred: self.mod.executar(caminho, aba, cred, de=de, ate=ate), True)
 
 
 class AbaVerificar(_AbaPlanilha):

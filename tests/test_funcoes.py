@@ -4,7 +4,7 @@ from datetime import date, datetime
 
 import pytest
 
-from ferramentas1doc import busca_argv, processos_do_dia as pdd
+from ferramentas1doc import busca_argv, faltantes, processos_do_dia as pdd
 from ferramentas1doc.gui.log import TerminalEmMemoria
 
 HOJE = date(2026, 1, 15)
@@ -75,6 +75,52 @@ def test_montar_argv_erros():
         busca_argv.montar_argv({"caixas": ["entrada"], "dias_etapa_min": "dez"})
     assert "data inválida" in busca_argv.validar(["--emissao-de", "31/31/2026"])
     assert "--nao-existe" in busca_argv.validar(["--nao-existe"])
+
+
+@pytest.mark.parametrize("txt,esperado", [
+    ("", None), ("  ", None), (None, None),
+    ("hoje", HOJE), ("Ontem", date(2026, 1, 14)), ("-30", date(2025, 12, 16)), ("- 7", date(2026, 1, 8)),
+    ("01/01/2025", date(2025, 1, 1)), ("1/1/25", date(2025, 1, 1)), ("10/01", date(2026, 1, 10)),
+    ("20/12", date(2025, 12, 20)),          # sem ano e no futuro: ano anterior
+])
+def test_faltantes_ler_data(txt, esperado):
+    assert faltantes.ler_data(txt, HOJE) == esperado
+
+
+@pytest.mark.parametrize("txt", ["31/02/2026", "abc", "-99999999999", "2026"])
+def test_faltantes_ler_data_invalida(txt):
+    with pytest.raises(ValueError):
+        faltantes.ler_data(txt, HOJE)
+
+
+def test_faltantes_ler_periodo():
+    assert faltantes.ler_periodo("", "", HOJE) == (None, None)
+    assert faltantes.ler_periodo("01/12/2025", "ontem", HOJE) == (date(2025, 12, 1), date(2026, 1, 14))
+    assert faltantes.ler_periodo("", "31/12/2020", HOJE) == (None, date(2020, 12, 31))
+    with pytest.raises(ValueError, match="Data final não reconhecida"):
+        faltantes.ler_periodo("", "32/01/2026", HOJE)
+    with pytest.raises(ValueError, match="ainda não chegou"):
+        faltantes.ler_periodo("16/01/2026", "", HOJE)
+    with pytest.raises(ValueError, match="depois da final"):
+        faltantes.ler_periodo("10/01/2026", "09/01/2026", HOJE)
+
+
+def test_faltantes_resolver_periodo():
+    itens = [{"ano": "2026"}, {"ano": "2024"}]
+    assert faltantes.resolver_periodo(None, None, itens, HOJE) == (date(2024, 1, 1), HOJE)
+    assert faltantes.resolver_periodo(None, None, [], HOJE) == (date(2026, 1, 1), HOJE)
+    assert faltantes.resolver_periodo(date(2025, 6, 1), date(2027, 1, 1), itens, HOJE) == \
+        (date(2025, 6, 1), HOJE)                                    # fim no futuro: hoje
+    with pytest.raises(SystemExit, match="Período vazio"):
+        faltantes.resolver_periodo(None, date(2023, 12, 31), itens, HOJE)
+
+
+def test_faltantes_data_de_emissao_na_listagem():
+    html = ('<table><tr><td><a class="link_emissao_a" href="./?pg=doc/ver&hash=AAAA1111BBBB2222CCCC">'
+            'Proc. Administrativo 31.632/2026 <small class="data">05/11/2026 09:15</small></a></td></tr>'
+            '<tr><td><a class="link_emissao_a" href="./?pg=doc/ver&hash=DDDD3333EEEE4444FFFF">'
+            'Proc. Administrativo 31.700/2026</a></td></tr></table>')
+    assert [ln["emissao"] for ln in faltantes.linhas_listagem(html)] == [date(2026, 11, 5), None]
 
 
 def test_terminal_reescreve_linha_com_retorno_de_carro():

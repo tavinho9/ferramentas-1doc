@@ -93,11 +93,15 @@ def test_busca(dados, cred, monkeypatch):
     assert [r["numero"] for r in res2["regs"]] == ["31.700/2026"]
 
 
-def test_faltantes(dados, cred, monkeypatch):
+def _preparar_faltantes(dados, monkeypatch):
     from ferramentas1doc import faltantes
     monkeypatch.setattr(faltantes, "PAUSA_REQ", 0)
     monkeypatch.setattr(faltantes, "ARQ_CACHE", os.path.join(str(dados["dados"]), "hash_cache_1doc.json"))
-    fake1doc.instalar(monkeypatch)
+    return faltantes, fake1doc.instalar(monkeypatch)
+
+
+def test_faltantes(dados, cred, monkeypatch):
+    faltantes, fake = _preparar_faltantes(dados, monkeypatch)
     planilha = _planilha(dados["dados"] / "acomp.xlsx", ["31.632/2026"])
     destino = faltantes.executar(planilha, None, cred)
     assert destino and os.path.dirname(destino) == str(dados["saida"])
@@ -106,6 +110,47 @@ def test_faltantes(dados, cred, monkeypatch):
     assert [l[0] for l in linhas[1:]] == ["31.700/2026"]
     assert linhas[1][2] == "Reforma da Escola Municipal Exemplo"
     assert os.path.isfile(faltantes.ARQ_CACHE)
+    # período padrão: de 1º/jan do ano mais antigo da planilha até hoje
+    assert set(fake.intervalos) == {f"01/01/2026 - {date.today():%d/%m/%Y}"}
+
+
+def test_faltantes_periodo_escolhido(dados, cred, monkeypatch):
+    faltantes, fake = _preparar_faltantes(dados, monkeypatch)
+    planilha = _planilha(dados["dados"] / "acomp.xlsx", ["31.632/2026"])
+    hoje = date.today()
+    destino = faltantes.executar(planilha, None, cred, de=hoje - timedelta(days=10),
+                                 ate=hoje + timedelta(days=5))       # fim no futuro vira hoje
+    assert [l[0] for l in _valores(destino, "Faltantes")[1:]] == ["31.700/2026"]
+    assert set(fake.intervalos) == {f"{hoje - timedelta(days=10):%d/%m/%Y} - {hoje:%d/%m/%Y}"}
+
+
+def test_faltantes_periodo_sem_processos(dados, cred, monkeypatch, capsys):
+    """Os dois processos foram emitidos hoje. Com o período terminando ontem
+    nenhum entra, mesmo com o servidor (de mentira) ignorando o intervalo: a
+    data de emissão lida na listagem confere de novo. Não é erro."""
+    faltantes, fake = _preparar_faltantes(dados, monkeypatch)
+    planilha = _planilha(dados["dados"] / "acomp.xlsx", ["31.632/2026"])
+    ontem = date.today() - timedelta(days=1)
+    assert faltantes.executar(planilha, None, cred, de=ontem - timedelta(days=30), ate=ontem) is None
+    assert set(fake.intervalos) == {f"{ontem - timedelta(days=30):%d/%m/%Y} - {ontem:%d/%m/%Y}"}
+    assert ("GET", "doc/ver") not in fake.pedidos               # nenhum processo aberto
+    assert "Nenhum Proc. Administrativo emitido de" in capsys.readouterr().out
+    assert os.listdir(str(dados["saida"])) == []
+
+
+def test_faltantes_todos_ja_na_planilha(dados, cred, monkeypatch, capsys):
+    faltantes, _fake = _preparar_faltantes(dados, monkeypatch)
+    planilha = _planilha(dados["dados"] / "acomp.xlsx", ["31.632/2026", "31.700/2026"])
+    assert faltantes.executar(planilha, None, cred) is None
+    assert "já estão na planilha" in capsys.readouterr().out
+
+
+def test_faltantes_periodo_vazio(dados, cred, monkeypatch):
+    """Só a data final, antes do início padrão (1º/jan de 2026, pela planilha)."""
+    faltantes, _fake = _preparar_faltantes(dados, monkeypatch)
+    planilha = _planilha(dados["dados"] / "acomp.xlsx", ["31.632/2026"])
+    with pytest.raises(SystemExit, match="Período vazio"):
+        faltantes.executar(planilha, None, cred, ate=date(2025, 12, 31))
 
 
 def test_verificar_planilha(dados, cred, monkeypatch):

@@ -12,8 +12,9 @@ coluna em que mais células têm cara de número de processo.
 
 O QUE CONTA COMO "FALTANDO"
 ---------------------------
-Proc. Administrativo das caixas do setor (CAIXAS_BUSCA), emitido desde
-1º/jan do ano mais antigo da planilha, que:
+Proc. Administrativo das caixas do setor (CAIXAS_BUSCA), emitido no
+período escolhido (padrão: de 1º/jan do ano mais antigo da planilha até
+hoje; ver PERÍODO DE EMISSÃO), que:
   1. não está na planilha (nem ele, nem o processo de origem, nem o
      processo novo emitido a partir dele);
   2. é de abertura, fase preparatória ou elaboração de documentação
@@ -58,6 +59,8 @@ USO
     Linha de comando:
     python -m ferramentas1doc.faltantes                 # abre seletor de arquivo
     python -m ferramentas1doc.faltantes planilha.xlsx --aba "Planilha1"
+    python -m ferramentas1doc.faltantes planilha.xlsx --de 01/01/2025 --ate 30/06/2025
+    python -m ferramentas1doc.faltantes planilha.xlsx --de -90      # últimos 90 dias
 """
 
 import argparse
@@ -70,7 +73,7 @@ import time
 import unicodedata
 from concurrent.futures import ThreadPoolExecutor
 from copy import copy
-from datetime import datetime
+from datetime import date, datetime, timedelta
 
 import requests
 from bs4 import BeautifulSoup
@@ -81,7 +84,7 @@ from openpyxl.worksheet.table import Table, TableStyleInfo
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-from . import caminhos, config, sessao as sessao_1doc
+from . import caminhos, config, processos_do_dia, sessao as sessao_1doc
 
 
 # ============================================================
@@ -104,7 +107,7 @@ ETAPA_CORTE = "Pesquisa de Mercado"
 # passaram da Pesquisa saem do cache (chave "passou:").
 CAIXAS_BUSCA = (("entrada", "Em aberto"), ("saida", "Caixa de saída"),
                 ("arquivo", "Arquivados"), ("favoritos", "Favoritos"))
-ANO_INICIAL = None            # None = ano mais antigo da planilha
+ANO_INICIAL = None            # início padrão do período: None = ano mais antigo da planilha
 MAX_PAGINAS_CAIXA = 300       # por caixa
 
 # Quantos despachos do fim examinar à procura de cancelamento
@@ -194,6 +197,78 @@ def ler_numero(valor):
     digitos = m.group(1).replace(".", "").lstrip("0") or "0"
     ano = m.group(2)
     return f"{int(digitos):,}".replace(",", ".") + f"/{ano}", digitos, ano
+
+
+# ============================================================
+# PERÍODO DE EMISSÃO
+# ============================================================
+#
+# Só entram os processos emitidos no período, de `de` a `ate` (as duas
+# pontas incluídas). Escolhido na aba ou por --de/--ate; sem data inicial,
+# vale 1º/jan do ano mais antigo da planilha (ou de ANO_INICIAL); sem data
+# final, hoje. O índice de origem (NOVO PROCESSO) vai do início do período
+# até hoje, qualquer que seja o fim: o processo novo é emitido depois da
+# elaboração, às vezes depois do fim do período.
+
+FORMATOS_DATA = "DD/MM/AAAA, DD/MM/AA, DD/MM, hoje, ontem ou -N (N dias atrás)"
+
+
+def ler_data(txt, hoje=None):
+    """Data digitada (FORMATOS_DATA) → date; vazio → None. ValueError se não
+    for uma data."""
+    hoje = hoje or date.today()
+    t = re.sub(r"\s+", " ", (txt or "").strip().lower())
+    if not t:
+        return None
+    if t == "hoje":
+        return hoje
+    if t == "ontem":
+        return hoje - timedelta(days=1)
+    m = re.fullmatch(r"- ?(\d+)", t)
+    if m:
+        try:
+            return hoje - timedelta(days=int(m[1]))
+        except OverflowError:
+            raise ValueError(f"data fora do calendário: {txt.strip()!r}") from None
+    d = processos_do_dia.interpretar_data(t, hoje)
+    if d is None:
+        raise ValueError(f"data não reconhecida: {txt.strip()!r}")
+    return d
+
+
+def ler_periodo(de_txt, ate_txt, hoje=None):
+    """Datas digitadas → (de, ate), cada uma date ou None (= padrão).
+    ValueError, com a mensagem para o usuário, se o período não servir."""
+    hoje = hoje or date.today()
+    datas = []
+    for nome, txt in (("inicial", de_txt), ("final", ate_txt)):
+        try:
+            datas.append(ler_data(txt, hoje))
+        except ValueError:
+            raise ValueError(f"Data {nome} não reconhecida: \"{(txt or '').strip()}\".") from None
+    de, ate = datas
+    if de and de > hoje:
+        raise ValueError(f"A data inicial ({de:%d/%m/%Y}) ainda não chegou.")
+    if de and ate and de > ate:
+        raise ValueError(f"A data inicial ({de:%d/%m/%Y}) é depois da final ({ate:%d/%m/%Y}).")
+    return de, ate
+
+
+def resolver_periodo(de, ate, itens, hoje=None):
+    """Completa o período com o padrão: sem `de`, 1º/jan do ano mais antigo
+    da planilha (ou de ANO_INICIAL); sem `ate`, ou com ele no futuro, hoje."""
+    hoje = hoje or date.today()
+    if de is None:
+        de = date(ANO_INICIAL or min((int(it["ano"]) for it in itens), default=hoje.year), 1, 1)
+    ate = min(ate or hoje, hoje)
+    if de > ate:
+        raise SystemExit(f"✗ Período vazio: a data final ({ate:%d/%m/%Y}) é anterior ao início "
+                         f"({de:%d/%m/%Y}). Informe também a data inicial.")
+    return de, ate
+
+
+def texto_periodo(de, ate, sep=" a "):
+    return f"{de:%d/%m/%Y}{sep}{ate:%d/%m/%Y}"
 
 
 # ============================================================
@@ -575,9 +650,9 @@ def sem_etapa_corte(etapas):
 #   4. índice reverso origem → processo novo, montado uma vez por execução:
 #      percorre as caixas do setor (Em aberto, Saída, Arquivados, Favoritos),
 #      pega só os Proc. Administrativos com etiqueta de Abertura ou de Fase
-#      Preparatória emitidos desde 1º/jan do ano mais antigo da planilha, e
-#      lê a origem de cada um. A origem não muda, então fica no cache e cada
-#      processo só é aberto na primeira execução em que aparece.
+#      Preparatória emitidos do início do período até hoje, e lê a origem de
+#      cada um. A origem não muda, então fica no cache e cada processo só é
+#      aberto na primeira execução em que aparece.
 #      (O filtro pai_raiz da listagem foi testado e o servidor não o aplica.)
 # Aceite:
 #   • origem do candidato = a elaboração           → vínculo confirmado
@@ -667,11 +742,25 @@ def _html_listagem(texto):
     return "\n".join(pedacos)
 
 
+_RE_DATA_LINHA = re.compile(r"(\d{2})/(\d{2})/(\d{4})")
+
+
+def _data_emissao_linha(a):
+    """Data de emissão da linha (<small class="data"> dentro do link), ou None."""
+    el = a.select_one("small.data")
+    m = _RE_DATA_LINHA.search(el.get_text(" ") if el is not None else "")
+    try:
+        return date(int(m[3]), int(m[2]), int(m[1])) if m else None
+    except ValueError:
+        return None
+
+
 def linhas_listagem(html):
-    """[{hash, numero, etiqueta, prioridade, objeto}] das linhas da listagem.
+    """[{hash, numero, etiqueta, prioridade, emissao}] das linhas da listagem.
     A etiqueta é o title do badge de assunto da linha ("Abertura de
     Procedimento Licitatório", "Fase Preparatória de Procedimento
-    Licitatório", "Elaboração de Documentos Preparatórios")."""
+    Licitatório", "Elaboração de Documentos Preparatórios"); emissao é a
+    data (date) lida na linha, ou None."""
     soup = BeautifulSoup(html, PARSER)
     linhas = []
     for a in soup.select("a.link_emissao_a"):
@@ -689,14 +778,17 @@ def linhas_listagem(html):
                                    or _RE_ETIQ_INDICE.search(_norm(t_))):
                 etiqueta = t_
         linhas.append({"hash": h, "numero": num[0], "etiqueta": etiqueta,
-                       "prioridade": prioridade})
+                       "prioridade": prioridade, "emissao": _data_emissao_linha(a)})
     return linhas
 
 
-def listar_caixa(ctx, caixa, intervalo):
-    """Todas as páginas de uma caixa (só Proc. Administrativos), filtradas por
-    emissão no intervalo. Guardada em ctx: cada caixa é listada uma vez."""
-    chave = (caixa, intervalo)
+def listar_caixa(ctx, caixa, de, ate):
+    """Todas as páginas de uma caixa (só Proc. Administrativos) emitidos de
+    `de` a `ate` (date, as duas pontas incluídas). Quem filtra é o servidor
+    (parâmetro intervalo); a data de emissão lida na linha confere de novo,
+    para o período valer mesmo se o servidor um dia ignorar o filtro.
+    Guardada em ctx: cada caixa é listada uma vez por período."""
+    chave = (caixa, de, ate)
     with ctx.lock_listagem:
         if chave in ctx.listagens:
             return ctx.listagens[chave]
@@ -704,14 +796,14 @@ def listar_caixa(ctx, caixa, intervalo):
         while pagina <= min(total or MAX_PAGINAS_CAIXA, MAX_PAGINAS_CAIXA):
             params = {"chamada": "caixa", "pg": "painel/listar", "caixa": caixa,
                       "num_pagina": str(pagina), "ordenar": "1", "ordem": "desc",
-                      "modo_visualizacao": "1", "intervalo": intervalo,
+                      "modo_visualizacao": "1", "intervalo": texto_periodo(de, ate, " - "),
                       "emissoes_arquivado_prazos": "0", "itd": ID_DOCUMENTO}
             html = _html_listagem(baixar(ctx.sessao, f"{URL_1DOC}/link.php", params=params,
                                          xhr=True, referer=URL_PAINEL))
             achadas = linhas_listagem(html)
             if not achadas:
                 break
-            linhas += achadas
+            linhas += [ln for ln in achadas if ln["emissao"] is None or de <= ln["emissao"] <= ate]
             m = _RE_TOTAL_PAG.search(html)
             if m:
                 total = int(m.group(2))
@@ -722,22 +814,18 @@ def listar_caixa(ctx, caixa, intervalo):
         return linhas
 
 
-def intervalo_busca(ctx):
-    return f"01/01/{ctx.ano_min} - {datetime.now():%d/%m/%Y}"
-
-
 def montar_indice(ctx):
     """origem (hash e número) → [hashes dos processos emitidos a partir dela].
     Montado uma vez; as outras threads esperam e reaproveitam."""
     with ctx.lock_indice:
         if ctx.indice is not None:
             return ctx.indice
-        intervalo = intervalo_busca(ctx)
-        print(f"\n  … montando o índice de origem (caixas do setor, emissões de {intervalo})")
+        de, ate = ctx.de, ctx.hoje         # até hoje: o processo novo vem depois da elaboração
+        print(f"\n  … montando o índice de origem (caixas do setor, emissões de {texto_periodo(de, ate)})")
         candidatos, falhas = {}, []
         for caixa, rotulo in CAIXAS_INDICE:
             try:
-                for ln in listar_caixa(ctx, caixa, intervalo):
+                for ln in listar_caixa(ctx, caixa, de, ate):
                     if _RE_ETIQ_INDICE.search(_norm(ln["etiqueta"])):
                         candidatos[ln["hash"]] = ln["etiqueta"]
             except requests.RequestException as e:
@@ -848,11 +936,13 @@ def buscar_novos(ctx, elab, html, nivel=1):
 
 class Ctx:
     """O que todas as threads compartilham."""
-    def __init__(self, sessao, cache, driver, ano_min=None):
+    def __init__(self, sessao, cache, driver, de=None, ate=None):
         self.sessao, self.cache, self.driver = sessao, cache, driver
         self.lock_cache, self.lock_driver = threading.Lock(), threading.Lock()
         self.lock_indice, self.lock_listagem = threading.Lock(), threading.Lock()
-        self.ano_min = ano_min or datetime.now().year
+        self.hoje = date.today()       # fixo na execução, mesmo se ela virar a meia-noite
+        self.de = de or date(self.hoje.year, 1, 1)
+        self.ate = ate or self.hoje
         self.indice, self.indice_info = None, {}
         self.listagens = {}
         self.planilha = set()
@@ -1421,10 +1511,11 @@ def escolher_arquivo():
     return input("Caminho da planilha .xlsx: ").strip().strip('"')
 
 
-def executar(caminho, aba, cred, pasta_saida=None, abrir=None):
+def executar(caminho, aba, cred, pasta_saida=None, abrir=None, de=None, ate=None):
     """Roda a verificação da planilha `caminho` (aba `aba`, None = a ativa)
-    com as credenciais da sessão (sessao.obter_sessao). Devolve o caminho da
-    planilha gerada, ou None se nenhuma foi gerada."""
+    com as credenciais da sessão (sessao.obter_sessao), olhando os processos
+    emitidos de `de` a `ate` (date; None = o padrão, ver resolver_periodo).
+    Devolve o caminho da planilha gerada, ou None se nenhuma foi gerada."""
     cfg = config.carregar()
     pasta_saida = pasta_saida or config.pasta_saida(cfg)
     abrir = cfg["abrir_planilha"] if abrir is None else abrir
@@ -1434,33 +1525,36 @@ def executar(caminho, aba, cred, pasta_saida=None, abrir=None):
 
     _wb, ws, _lin_cab, col, itens, ignoradas = ler_planilha(caminho, args.aba)
     na_planilha = {it["numero"] for it in itens}
+    inicio_padrao = de is None
+    de, ate = resolver_periodo(de, ate, itens)
     print("=" * 64)
     print(f"Planilha: {os.path.basename(caminho)}  |  aba: {ws.title}")
     print(f"Coluna do número: {get_column_letter(col)}  |  processos na planilha: {len(na_planilha)}")
     if ignoradas:
         print(f"  ⚠ {len(ignoradas)} célula(s) sem número reconhecível: "
               + ", ".join(f"linha {r}" for r, _ in ignoradas[:8]))
+    print(f"Período de emissão: {texto_periodo(de, ate)}"
+          + ("  (início padrão: 1º/jan do ano mais antigo da planilha)"
+             if inicio_padrao and not ANO_INICIAL else ""))
     print("=" * 64)
 
     t0 = time.time()
     cache = carregar_cache()
-    ano_min = ANO_INICIAL or min((int(it["ano"]) for it in itens), default=datetime.now().year)
 
     driver = sessao_1doc.NavegadorSobDemanda(cred)   # só abre se o Localizar por HTTP falhar
     ctx = None
-    linhas, resultados, falhas_caixa = {}, [], []
+    linhas, resultados, falhas_caixa, nada_a_verificar = {}, [], [], False
     try:
         sessao = sessao_http(cred.cookies, cred.ua)
         baixar(sessao, URL_PAINEL)        # fixa o contexto do setor e testa os cookies
         print("✓ Sessão HTTP válida")
-        ctx = Ctx(sessao, cache, driver, ano_min=ano_min)
+        ctx = Ctx(sessao, cache, driver, de=de, ate=ate)
         ctx.planilha = na_planilha
-        intervalo = intervalo_busca(ctx)
 
-        print(f"\nCaixas do setor (Proc. Administrativos emitidos em {intervalo}):")
+        print(f"\nCaixas do setor (Proc. Administrativos emitidos de {texto_periodo(de, ate)}):")
         for caixa, rotulo in CAIXAS_BUSCA:
             try:
-                achadas = listar_caixa(ctx, caixa, intervalo)
+                achadas = listar_caixa(ctx, caixa, de, ate)
             except requests.RequestException as e:
                 falhas_caixa.append(rotulo)
                 print(f"  ✗ {rotulo}: {str(e)[:60]}")
@@ -1472,6 +1566,7 @@ def executar(caminho, aba, cred, pasta_saida=None, abrir=None):
             print(f"  {rotulo:<16} {len(achadas):>5} processo(s)")
 
         fora_da_planilha = [ln for ln in linhas.values() if ln["numero"] not in na_planilha]
+        nada_a_verificar = not fora_da_planilha and len(falhas_caixa) < len(CAIXAS_BUSCA)
         print(f"  {'únicos':<16} {len(linhas):>5}  |  já na planilha: "
               f"{len(linhas) - len(fora_da_planilha)}  |  a verificar: {len(fora_da_planilha)}\n")
 
@@ -1497,6 +1592,18 @@ def executar(caminho, aba, cred, pasta_saida=None, abrir=None):
             ctx.driver = None
         driver.fechar()
 
+    if nada_a_verificar:               # período sem processo, ou todos já na planilha: não é erro
+        print("\n" + "=" * 64)
+        if linhas:
+            print(f"○ Todos os processos emitidos de {texto_periodo(de, ate)} nas caixas "
+                  f"({len(linhas)}) já estão na planilha; nenhuma planilha exportada.")
+        else:
+            print(f"○ Nenhum Proc. Administrativo emitido de {texto_periodo(de, ate)} nas caixas "
+                  "do setor; nenhuma planilha exportada.")
+        if falhas_caixa:
+            print(f"  ⚠ caixas não lidas: {', '.join(falhas_caixa)} (resultado incompleto)")
+        print("=" * 64)
+        return None
     if not resultados:
         raise SystemExit("✗ Nenhum processo verificado; planilha não gerada.")
 
@@ -1544,14 +1651,23 @@ def executar(caminho, aba, cred, pasta_saida=None, abrir=None):
 
 
 def main(argv=None):
-    """Linha de comando: python -m ferramentas1doc.faltantes [planilha.xlsx] [--aba ABA]"""
+    """Linha de comando: python -m ferramentas1doc.faltantes [planilha.xlsx] [--aba ABA]
+    [--de DATA] [--ate DATA]"""
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[1])
     ap.add_argument("planilha", nargs="?")
     ap.add_argument("--aba", help="nome da aba (padrão: a ativa)")
+    ap.add_argument("--de", metavar="DATA",
+                    help=f"só processos emitidos a partir desta data ({FORMATOS_DATA}); "
+                         "padrão: 1º/jan do ano mais antigo da planilha")
+    ap.add_argument("--ate", metavar="DATA", help="só processos emitidos até esta data; padrão: hoje")
     args = ap.parse_args(argv)
+    try:
+        de, ate = ler_periodo(args.de, args.ate)
+    except ValueError as e:
+        ap.error(str(e))
     caminho = args.planilha or escolher_arquivo()
     cred = sessao_1doc.obter_sessao()
-    return executar(caminho, args.aba, cred)
+    return executar(caminho, args.aba, cred, de=de, ate=ate)
 
 
 if __name__ == "__main__":
