@@ -120,8 +120,7 @@ class AbaBusca(ttk.Frame):
         _descricao(self, "Busca nas caixas do setor por etapa, fase, datas e mudanças de etapa. Gera uma "
                          "planilha com as abas Resultado, Transições e Parâmetros. Textos: sem diferença de "
                          "maiúsculas e acentos, \"contém\"; vários valores num campo, separados por ';', "
-                         "valem como OU. Datas: DD/MM/AAAA, hoje, ontem ou -N (N dias atrás). "
-                         "Ex.: \"Ainda não chegou a\" = Pesquisa de Mercado.")
+                         "valem como OU. Ex.: \"Ainda não chegou a\" = Pesquisa de Mercado.")
         self.v = {}
         self.janela_ajuda = None
         corpo = ttk.Frame(self)
@@ -171,6 +170,8 @@ class AbaBusca(ttk.Frame):
         self._campo(d, 4, 0, "entrada_de", "Entrou na etapa atual de:", 11)
         self._campo(d, 4, 2, "entrada_ate", "até:", 11)
         self._campo(d, 5, 0, "sem_mov_min", "Parado há (dias), mín.:", 6)
+        self.dica_datas = ttk.Label(d, text=busca_argv.DICA_DATAS, foreground="#777", justify="left")
+        self.dica_datas.grid(row=6, column=0, columnspan=4, sticky="w", padx=8, pady=(4, 2))
 
         # Outros
         o = ttk.LabelFrame(corpo, text="Outros")

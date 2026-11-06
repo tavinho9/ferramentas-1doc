@@ -68,6 +68,18 @@ def test_montar_argv_todas_as_caixas_e_todas_prioridades():
     assert argv == ["--caixas", "todas"]
 
 
+@pytest.mark.parametrize("exemplo", busca_argv.EXEMPLOS_DATA)
+def test_busca_aceita_os_formatos_da_instrucao_de_datas(exemplo):
+    assert busca_argv.validar(["--emissao-de", exemplo, "--mudanca-ate", exemplo]) is None
+
+
+def test_instrucao_de_datas_da_busca():
+    for formato in ("DD/MM/AAAA", "AAAA-MM-DD", "hoje", "ontem", "-N"):
+        assert formato in busca_argv.DICA_DATAS
+    # a instrução pede o ano completo: sem ele, a busca recusa
+    assert "data inválida" in busca_argv.validar(["--emissao-de", "05/11"])
+
+
 def test_montar_argv_erros():
     with pytest.raises(busca_argv.FormularioInvalido, match="caixa"):
         busca_argv.montar_argv({"caixas": []})

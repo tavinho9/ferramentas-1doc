@@ -89,6 +89,14 @@ def test_data_invalida_avisa_sem_executar(janela):
     assert janela.avisos and "Data não reconhecida" in janela.avisos[0][1]
 
 
+def test_busca_mostra_instrucao_de_datas(janela):
+    from ferramentas1doc import busca_argv
+    aba = janela.abas[1]
+    assert aba.dica_datas.cget("text") == busca_argv.DICA_DATAS
+    assert aba.dica_datas.winfo_manager() == "grid"
+    assert aba.dica_datas.master.cget("text") == "Datas e mudanças de etapa"     # junto dos campos
+
+
 def test_busca_com_formulario_invalido(janela):
     aba = janela.abas[1]
     for v in aba.caixas.values():

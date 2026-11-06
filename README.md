@@ -53,7 +53,10 @@ do Windows → Aplicativos → Ferramentas 1Doc → Desinstalar.
 Na aba **Busca**, os filtros mais usados têm campo próprio. Os demais (por
 exemplo `--setor-etapa`, `--cita-setor`, `--ordenar`) vão em **Outras
 opções**, no mesmo formato da linha de comando. **Ver todas as opções…**
-mostra a lista completa.
+mostra a lista completa. As datas, explicadas no próprio quadro de datas,
+vão como DD/MM/AAAA com o ano completo (`05/11/2026`), AAAA-MM-DD, `hoje`,
+`ontem` ou `-N` (N dias atrás: `-7` = uma semana). O dia informado entra na
+busca: "até 31/10/2026" inclui o dia 31.
 
 Na aba **Faltantes na planilha**, os campos **Emitidos de** e **até** definem
 o período de emissão dos processos procurados. Aceitam DD/MM/AAAA, DD/MM/AA,

@@ -15,6 +15,13 @@ from datetime import datetime
 CAIXAS = ("entrada", "saida", "arquivo", "favoritos")
 PRIORIDADES = ("Urgente", "Alta", "Média", "Baixa")
 
+# Instrução de datas mostrada na aba: os formatos que o busca aceita
+# (busca.data_cli), um exemplo de cada conferido nos testes. Duas linhas,
+# para caber no espaço livre do quadro de datas.
+EXEMPLOS_DATA = ("05/11/2026", "2026-11-05", "hoje", "ontem", "-7")
+DICA_DATAS = ("Datas: DD/MM/AAAA (05/11/2026), AAAA-MM-DD, hoje, ontem\n"
+              "ou -N = N dias atrás (-7). Inclui o próprio dia informado.")
+
 # campo do formulário → opção do busca (texto; aceita vários separados por ";")
 TEXTOS_MULTIPLOS = {
     "etapa": "--etapa",
