@@ -7,7 +7,7 @@ Prefeitura de Montes Claros numa janela só:
 |---|---|---|
 | **Processos do dia** | `processos_do_dia_todos_1doc.py` | Processos emitidos num dia, com a etapa atual → `processos novos DD.MM.xlsx` e `processos_do_dia.json` |
 | **Busca** | `busca_1doc.py` | Busca por etapa, fase, datas e mudanças de etapa → `Busca 1Doc ….xlsx` |
-| **Faltantes na planilha** | `verificar_faltantes_1doc.py` | Processos antes da Pesquisa de Mercado que não estão na planilha de acompanhamento → `<planilha>_faltantes_….xlsx` |
+| **Faltantes na planilha** | `verificar_faltantes_1doc.py` | Processos emitidos no período escolhido, antes da Pesquisa de Mercado, que não estão na planilha de acompanhamento → `<planilha>_faltantes_….xlsx` |
 | **Verificar planilha** | `verificar_planilha_unificada_1doc.py` | Processos da planilha que já chegaram à Pesquisa de Mercado → `<planilha>_verificada_….xlsx` |
 
 As regras de cada script (critérios de etapa, filtros, colunas das planilhas,
@@ -50,10 +50,42 @@ do Windows → Aplicativos → Ferramentas 1Doc → Desinstalar.
 4. A planilha sai na pasta configurada (padrão: Área de Trabalho) e abre no
    Excel ao terminar. Isso pode ser desligado em **Configurações**.
 
-Na aba **Busca**, os filtros mais usados têm campo próprio. Os demais (por
+Os campos de data têm, ao lado, um botão de calendário: ele abre o mês logo
+abaixo do campo, e clicar num dia escreve a data (DD/MM/AAAA). As setas do
+teclado mudam o dia, PageUp/PageDown o mês e Enter escolhe. Esc ou um clique
+fora fecham o calendário sem mudar nada, e **Limpar** esvazia o campo. Onde uma
+data futura não vale (o dia em *Processos do dia* e o início do período em
+*Faltantes*), os dias depois de hoje aparecem apagados. Digitar a data continua
+valendo, com os mesmos formatos de antes.
+
+Se a janela estiver pequena (ou o Windows usar escala de 125–150%), o
+formulário da aba ganha barra de rolagem, e a roda do mouse rola o formulário.
+O botão **Executar** e as *Mensagens* continuam sempre à vista. O divisor entre
+a aba e as *Mensagens* pode ser arrastado.
+
+Na aba **Busca**, os campos de etapa (*Etapa atual contém*, *Exceto a etapa*,
+*Ainda não chegou a*, *Já chegou a*, *Já passou por*, *…para a etapa*,
+*…saindo da etapa*) têm uma lista para escolher a etapa sem digitar. A lista
+traz o fluxo da Abertura e as etapas dos quadros que as buscas anteriores já
+leram, então cresce com o uso. Ainda dá para digitar parte do nome. Para juntar
+mais de uma etapa no mesmo campo, digite `;` depois da primeira e escolha a
+próxima na lista.
+
+Os filtros mais usados têm campo próprio. Os demais (por
 exemplo `--setor-etapa`, `--cita-setor`, `--ordenar`) vão em **Outras
 opções**, no mesmo formato da linha de comando. **Ver todas as opções…**
-mostra a lista completa.
+mostra a lista completa. As datas, explicadas no próprio quadro de datas,
+vão como DD/MM/AAAA com o ano completo (`05/11/2026`), AAAA-MM-DD, `hoje`,
+`ontem` ou `-N` (N dias atrás: `-7` = uma semana). O dia informado entra na
+busca: "até 31/10/2026" inclui o dia 31.
+
+Na aba **Faltantes na planilha**, os campos **Emitidos de** e **até** definem
+o período de emissão dos processos procurados. Aceitam DD/MM/AAAA, DD/MM/AA,
+DD/MM, `hoje`, `ontem` ou `-N` (N dias atrás; `-90` = últimos 90 dias). Com
+os campos vazios vale o padrão: de 1º de janeiro do ano mais antigo da planilha
+até hoje. Ao lado dos campos aparece o período que será usado. O programa
+guarda o que foi digitado para as próximas vezes; `-90` continua contando a
+partir do dia da execução. O botão **Padrão** limpa os dois campos.
 
 ## Onde ficam os arquivos
 
@@ -121,7 +153,8 @@ python app.py
 
 Cada ferramenta também roda pela linha de comando, por exemplo
 `python -m ferramentas1doc.busca --help` ou
-`python -m ferramentas1doc.processos_do_dia ontem`.
+`python -m ferramentas1doc.processos_do_dia ontem` ou
+`python -m ferramentas1doc.faltantes planilha.xlsx --de 01/01/2025 --ate 30/06/2025`.
 
 Testes:
 

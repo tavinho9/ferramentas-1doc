@@ -3,11 +3,12 @@
 import os
 import sys
 import time
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 
 tk = pytest.importorskip("tkinter")
+ttk = pytest.importorskip("tkinter.ttk")
 
 import fake1doc  # noqa: E402
 
@@ -89,6 +90,46 @@ def test_data_invalida_avisa_sem_executar(janela):
     assert janela.avisos and "Data não reconhecida" in janela.avisos[0][1]
 
 
+def test_busca_mostra_instrucao_de_datas(janela):
+    from ferramentas1doc import busca_argv
+    aba = janela.abas[1]
+    assert aba.dica_datas.cget("text") == busca_argv.DICA_DATAS
+    assert aba.dica_datas.winfo_manager() == "grid"
+    assert aba.dica_datas.master.cget("text") == "Datas e mudanças de etapa"     # junto dos campos
+
+
+def test_busca_campos_de_etapa_com_lista(janela, dados):
+    import json
+    from ferramentas1doc import busca_argv
+    with open(dados["dados"] / "1doc_cache.json", "w", encoding="utf-8") as f:
+        json.dump({"versao": "1.1", "det": {"3|1/2026": {"etapas_quadro": ["Elaboração do ETP", "Etapa Final"]}}},
+                  f)
+    aba = janela.abas[1]
+    assert set(aba.combos_etapa) == set(busca_argv.CAMPOS_ETAPA)
+    for chave, cb in aba.combos_etapa.items():
+        assert isinstance(cb, ttk.Combobox) and str(cb["state"]) != "readonly"   # aceita digitar
+        assert str(cb.cget("textvariable")) == str(aba.v[chave])
+
+    def escolher(cb, nome):                 # como o Tk faz: abre a lista, troca o valor, avisa
+        cb.tk.call(cb.cget("postcommand"))
+        assert nome in cb["values"]
+        cb.set(nome)
+        cb.event_generate("<<ComboboxSelected>>")
+
+    cb = aba.combos_etapa["etapa"]
+    escolher(cb, "Pesquisa de Mercado")
+    assert aba.v["etapa"].get() == "Pesquisa de Mercado"
+    cb.set("Pesquisa de Mercado; ")
+    escolher(cb, "Elaboração do ETP")        # etapa vinda do cache
+    assert aba.v["etapa"].get() == "Pesquisa de Mercado; Elaboração do ETP"
+    escolher(aba.combos_etapa["antes_de"], "Pesquisa de Mercado")
+    form = aba.formulario()
+    assert form["etapa"] == "Pesquisa de Mercado; Elaboração do ETP"
+    assert form["antes_de"] == "Pesquisa de Mercado"
+    for c in aba.combos_etapa.values():
+        c.set("")
+
+
 def test_busca_com_formulario_invalido(janela):
     aba = janela.abas[1]
     for v in aba.caixas.values():
@@ -97,10 +138,210 @@ def test_busca_com_formulario_invalido(janela):
     assert janela.executando is None and "caixa" in janela.avisos[0][1]
 
 
+def test_faltantes_periodo_invalido_avisa_sem_executar(janela):
+    aba = janela.abas[2]
+    aba.de.set("31/02/2026")
+    assert "não reconhecida" in aba.leitura.cget("text")          # aviso ao digitar
+    janela._executar(aba)
+    assert janela.executando is None
+    assert janela.avisos and "Data inicial não reconhecida" in janela.avisos[0][1]
+
+
+def test_faltantes_periodo_vai_para_a_execucao_e_fica_salvo(janela, dados, cred, monkeypatch):
+    from openpyxl import Workbook
+    from ferramentas1doc import config, faltantes
+    planilha = str(dados["dados"] / "acomp.xlsx")
+    Workbook().save(planilha)
+    chamadas = []
+    monkeypatch.setattr(faltantes, "executar", lambda *a, **k: chamadas.append((a, k)))
+    aba = janela.abas[2]
+    aba.planilha.set(planilha)
+    aba.de.set("-30")
+    aba.ate.set("ontem")
+    hoje = date.today()
+    assert aba.leitura.cget("text") == (f"→ de {hoje - timedelta(days=30):%d/%m/%Y} "
+                                        f"até {hoje - timedelta(days=1):%d/%m/%Y}")
+    _titulo, funcao, precisa_sessao = aba.tarefa()
+    funcao(cred)
+    assert precisa_sessao and chamadas[0][1] == {"de": hoje - timedelta(days=30), "ate": hoje - timedelta(days=1)}
+    cfg = config.carregar()
+    assert (cfg["faltantes_de"], cfg["faltantes_ate"]) == ("-30", "ontem")      # como digitado
+
+    aba.de.set("")                                                  # vazio = padrão
+    aba.ate.set("")
+    assert aba.leitura.cget("text").startswith("→ de 1º/jan do ano mais antigo da planilha até hoje")
+    aba.tarefa()[1](cred)
+    assert chamadas[1][1] == {"de": None, "ate": None}
+
+
 def _processar(j, vezes=6):
     for _ in range(vezes):
         j.update()
         time.sleep(0.05)
+
+
+def _rodar_roda(widget, para_baixo=True):
+    widget.event_generate("<MouseWheel>", delta=-120 if para_baixo else 120)
+
+
+def test_area_rolavel_mostra_barras_so_quando_falta_espaco(janela):
+    from ferramentas1doc.gui.rolagem import AreaRolavel
+    t = tk.Toplevel(janela)
+    try:
+        area = AreaRolavel(t)
+        area.pack(fill="both", expand=True)
+        conteudo = tk.Frame(area.canvas, width=600, height=400)
+        lista = ttk.Combobox(conteudo, values=("A", "B", "C"))
+        lista.place(x=10, y=10)
+        lista.set("A")
+        area.colocar(conteudo)
+        avisos = []
+        area.bind("<<RolagemMudou>>", lambda _e: avisos.append(1))
+        t.update_idletasks()
+        area.medir()
+        for geometria, vertical, horizontal in (("300x200", True, True), ("800x250", True, False),
+                                                ("350x600", False, True), ("800x600", False, False)):
+            t.geometry(geometria)
+            _processar(janela, 8)
+            assert (area.rolando(), area.rolando_h()) == (vertical, horizontal), geometria
+        assert avisos                                        # a janela é avisada quando as barras mudam
+        t.geometry("300x200")
+        _processar(janela, 8)
+        _rodar_roda(lista)
+        _processar(janela)
+        assert area.canvas.yview()[0] > 0                    # a roda rola a área...
+        assert lista.get() == "A"                            # ...e não troca o valor da lista
+    finally:
+        t.destroy()
+        _processar(janela)
+
+
+def test_janela_pequena_rola_a_aba_e_mostra_o_executar(janela):
+    """No tamanho mínimo, a aba Busca não cabia: as Mensagens sumiam e a aba
+    era cortada embaixo, levando o Executar."""
+    j = janela
+    j.notebook.select(1)
+    area, aba = j.areas[1], j.abas[1]
+    try:
+        j.geometry("960x700")
+        _processar(j, 12)
+        assert area.rolando()
+        btn = aba.btn_executar
+        assert btn.winfo_ismapped()
+        assert btn.winfo_rooty() + btn.winfo_height() <= j.winfo_rooty() + j.winfo_height()
+        assert j.texto.winfo_ismapped() and j.texto.winfo_height() > 40     # Mensagens continuam lá
+        cb = aba.combos_etapa["etapa"]
+        cb["values"] = ("Pesquisa de Mercado", "Etapa Final")
+        cb.set("Pesquisa de Mercado")
+        _rodar_roda(cb)
+        _processar(j)
+        assert area.canvas.yview()[0] > 0 and cb.get() == "Pesquisa de Mercado"
+        cb.set("")
+    finally:
+        j.geometry("1100x920")
+        _processar(j, 12)
+        j.notebook.select(0)
+        _processar(j)
+    if j.painel.winfo_height() - j.winfo_pixels("1.2i") >= j.notebook.winfo_reqheight():   # coube de novo
+        assert not area.rolando() and area.canvas.yview()[0] == 0
+        assert j.painel.sashpos(0) == j.notebook.winfo_reqheight()
+
+
+def test_calendario_semanas_e_leitura():
+    from ferramentas1doc.gui import calendario as cal
+    sem = cal.semanas(2026, 11)                        # novembro de 2026 começa num domingo
+    assert len(sem) == 6 and all(len(s_) == 7 for s_ in sem)
+    assert sem[0][0] == date(2026, 11, 1) and all(d.weekday() == 6 for d in (s_[0] for s_ in sem))
+    assert date(2026, 11, 30) in sem[4]
+    sem = cal.semanas(2026, 8)                         # agosto: começa no sábado, ocupa as 6 semanas
+    assert sem[0][0] == date(2026, 7, 26) and sem[5][-1] == date(2026, 9, 5)
+    hoje = date(2026, 11, 6)
+    for txt, esperado in (("05/11/2026", date(2026, 11, 5)), ("5/11/26", date(2026, 11, 5)),
+                          ("2026-11-05", date(2026, 11, 5)), ("hoje", hoje), ("ontem", date(2026, 11, 5)),
+                          ("-7", date(2026, 10, 30)), ("", None), ("31/02/2026", None), ("xyz", None)):
+        assert cal.ler_data_qualquer(txt, hoje) == esperado, txt
+
+
+def _abrir_calendario(j, botao):
+    from ferramentas1doc.gui.calendario import Calendario
+    botao.invoke()
+    _processar(j, 8)
+    c = Calendario.aberto
+    assert c is not None and c.winfo_viewable()
+    return c
+
+
+def _celula(c, dia):
+    return c.celulas[c.dias.index(dia)]
+
+
+def test_calendario_escolhe_o_dia_no_campo(janela):
+    from ferramentas1doc.gui.calendario import Calendario
+    j = janela
+    j.notebook.select(1)
+    aba = j.abas[1]
+    assert set(aba.botoes_data) == {"emissao_de", "emissao_ate", "mudanca_de", "mudanca_ate", "entrada_de",
+                                    "entrada_ate"}
+    var = aba.v["emissao_de"]
+    try:
+        var.set("05/03/2025")
+        c = _abrir_calendario(j, aba.botoes_data["emissao_de"])
+        assert (c.ano, c.mes) == (2025, 3) and c.titulo.cget("text") == "março de 2025"
+        assert j.grab_current() is c                    # clique fora dele cai nele (e o fecha)
+        c.btn_seguinte.invoke()
+        c.btn_seguinte.invoke()
+        assert c.titulo.cget("text") == "maio de 2025"
+        _celula(c, date(2025, 5, 20)).event_generate("<Button-1>")
+        _processar(j)
+        assert var.get() == "20/05/2025" and Calendario.aberto is None and j.grab_current() is None
+
+        c = _abrir_calendario(j, aba.botoes_data["emissao_de"])
+        assert c.escolhida == date(2025, 5, 20)
+        c.event_generate("<Escape>")                    # Esc fecha sem mudar
+        _processar(j)
+        assert var.get() == "20/05/2025" and Calendario.aberto is None
+
+        c = _abrir_calendario(j, aba.botoes_data["emissao_de"])
+        c.event_generate("<ButtonPress-1>", x=-50, y=-50, rootx=c.winfo_rootx() - 50,
+                         rooty=c.winfo_rooty() - 50)    # clique fora fecha sem mudar
+        _processar(j)
+        assert var.get() == "20/05/2025" and Calendario.aberto is None
+
+        c = _abrir_calendario(j, aba.botoes_data["emissao_de"])
+        c.btn_limpar.invoke()
+        _processar(j)
+        assert var.get() == "" and Calendario.aberto is None
+    finally:
+        Calendario.fechar_aberto()
+        var.set("")
+        j.notebook.select(0)
+        _processar(j)
+    assert _principal_livre(j)
+
+
+def test_calendario_nao_deixa_escolher_o_futuro_onde_ele_nao_vale(janela):
+    from ferramentas1doc.gui.calendario import Calendario
+    j = janela
+    aba = j.abas[0]                                     # Processos do dia
+    hoje = date.today()
+    try:
+        aba.dia.set("")
+        c = _abrir_calendario(j, aba.btn_calendario)
+        assert (c.ano, c.mes) == (hoje.year, hoje.month)
+        _celula(c, hoje + timedelta(days=1)).event_generate("<Button-1>")
+        _processar(j)
+        assert aba.dia.get() == "" and Calendario.aberto is c       # amanhã não se escolhe
+        assert c.btn_seguinte.instate(["disabled"])
+        c.btn_hoje.invoke()
+        _processar(j)
+        assert aba.dia.get() == f"{hoje:%d/%m/%Y}" and Calendario.aberto is None
+        c = _abrir_calendario(j, j.abas[2].btn_cal_ate)  # Faltantes, "até": o futuro vale (vira hoje)
+        assert not c.btn_seguinte.instate(["disabled"])
+    finally:
+        Calendario.fechar_aberto()
+        aba.dia.set(f"{hoje:%d/%m/%Y}")
+        _processar(j)
+    assert _principal_livre(j)
 
 
 def _dialogo_configuracoes(j):
@@ -159,18 +400,26 @@ def test_opcoes_da_busca_uma_so_presa_a_principal(janela):
 
 @pytest.mark.skipif(os.name != "nt", reason="minimizar e restaurar como o Windows faz (só no Windows)")
 @pytest.mark.parametrize("qual", ["Configurações", "Opções da busca"])
-def test_com_janela_secundaria_aberta_o_programa_minimiza_e_volta(janela, qual):
+def test_com_janela_secundaria_aberta_o_programa_minimiza_e_volta(janela, qual, capfd):
     """Com a janela de Configurações aberta, o programa minimizado tem de voltar
     pelo botão da barra de tarefas. Com um grab do Tk (e também com a principal
     desabilitada), o Windows ignora os comandos de sistema da janela principal
     (WM_SYSCOMMAND), inclusive o "restaurar": minimizada pelo Win+D, ela não
-    voltava mais."""
+    voltava mais.
+
+    Minimizar e restaurar vão por mensagens assíncronas (ShowWindowAsync,
+    PostMessageW), como chegam as do usuário: o Tk as trata no próprio laço de
+    eventos, dentro do update(). Uma chamada síncrona (ShowWindow,
+    SendMessageW) roda o procedimento da janela dentro da chamada do ctypes,
+    que soltou o GIL; um evento ligado a uma função Python disparado ali pode
+    derrubar o processo (o CI morreu assim, sem mensagem, neste teste, quando a
+    janela passou a ter funções Python ligadas a <Configure> e <Unmap>)."""
     import ctypes
     from ctypes import wintypes
     user32 = ctypes.WinDLL("user32")
-    user32.SendMessageW.argtypes = (wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
-    user32.SendMessageW.restype = wintypes.LPARAM
-    user32.ShowWindow.argtypes = (wintypes.HWND, ctypes.c_int)
+    user32.PostMessageW.argtypes = (wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
+    user32.PostMessageW.restype = wintypes.BOOL
+    user32.ShowWindowAsync.argtypes = (wintypes.HWND, ctypes.c_int)
     user32.IsIconic.argtypes = user32.IsWindowVisible.argtypes = (wintypes.HWND,)
     user32.GetWindow.argtypes = (wintypes.HWND, wintypes.UINT)
     user32.GetWindow.restype = wintypes.HWND
@@ -196,31 +445,34 @@ def test_com_janela_secundaria_aberta_o_programa_minimiza_e_volta(janela, qual):
         return (d.winfo_viewable() and user32.IsWindowVisible(moldura())
                 and user32.GetWindow(moldura(), GW_OWNER) == principal)
 
-    try:
-        assert visivel_na_frente_da_principal()
-        # "Mostrar área de trabalho" (Win+D): minimiza sem passar por WM_SYSCOMMAND
-        user32.ShowWindow(principal, SW_MINIMIZE)
-        _processar(j)
-        assert user32.IsIconic(principal)
-        assert not user32.IsWindowVisible(moldura())        # some junto com a principal
-        # clique no botão do programa na barra de tarefas
-        user32.SendMessageW(principal, WM_SYSCOMMAND, SC_RESTORE, 0)
-        _processar(j)
-        assert not user32.IsIconic(principal), "o programa ficou preso minimizado"
-        assert j.state() == "normal"
-        assert visivel_na_frente_da_principal(), "a janela secundária não voltou"
+    # sem a captura do pytest, uma queda do Tk ou do Python aqui deixa a mensagem no log
+    with capfd.disabled():
+        try:
+            assert visivel_na_frente_da_principal()
+            # "Mostrar área de trabalho" (Win+D): minimiza sem passar por WM_SYSCOMMAND
+            user32.ShowWindowAsync(principal, SW_MINIMIZE)
+            _processar(j)
+            assert user32.IsIconic(principal)
+            assert not user32.IsWindowVisible(moldura())        # some junto com a principal
+            # clique no botão do programa na barra de tarefas
+            user32.PostMessageW(principal, WM_SYSCOMMAND, SC_RESTORE, 0)
+            _processar(j)
+            assert not user32.IsIconic(principal), "o programa ficou preso minimizado"
+            assert j.state() == "normal"
+            assert visivel_na_frente_da_principal(), "a janela secundária não voltou"
 
-        # minimizar pela barra de tarefas e restaurar de novo
-        user32.SendMessageW(principal, WM_SYSCOMMAND, SC_MINIMIZE, 0)
-        _processar(j)
-        assert user32.IsIconic(principal), "o comando de minimizar foi ignorado"
-        assert not user32.IsWindowVisible(moldura())
-        user32.SendMessageW(principal, WM_SYSCOMMAND, SC_RESTORE, 0)
-        _processar(j)
-        assert not user32.IsIconic(principal), "o programa ficou preso minimizado"
-        assert visivel_na_frente_da_principal(), "a janela secundária não voltou"
-    finally:
-        user32.ShowWindow(principal, SW_RESTORE)
-        d.destroy()
-        _processar(j)
+            # minimizar pela barra de tarefas e restaurar de novo
+            user32.PostMessageW(principal, WM_SYSCOMMAND, SC_MINIMIZE, 0)
+            _processar(j)
+            assert user32.IsIconic(principal), "o comando de minimizar foi ignorado"
+            assert not user32.IsWindowVisible(moldura())
+            user32.PostMessageW(principal, WM_SYSCOMMAND, SC_RESTORE, 0)
+            _processar(j)
+            assert not user32.IsIconic(principal), "o programa ficou preso minimizado"
+            assert visivel_na_frente_da_principal(), "a janela secundária não voltou"
+        finally:
+            user32.ShowWindowAsync(principal, SW_RESTORE)
+            _processar(j)
+            d.destroy()
+            _processar(j)
 

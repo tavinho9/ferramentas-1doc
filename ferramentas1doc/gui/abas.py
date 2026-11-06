@@ -9,8 +9,10 @@ import os
 import tkinter as tk
 from datetime import date, datetime, timedelta
 from tkinter import filedialog, ttk
+from tkinter import font as tkfont
 
 from .. import busca_argv, caminhos, config
+from .calendario import BotaoCalendario
 from .secundaria import JanelaSecundaria, abrir_unica
 
 DIAS_SEMANA = ("segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira",
@@ -57,8 +59,12 @@ class AbaProcessosDoDia(ttk.Frame):
         f.pack(fill="x", padx=12, pady=6)
         ttk.Label(f, text="Dia de emissão:").grid(row=0, column=0, sticky="w")
         self.dia = tk.StringVar(value=date.today().strftime("%d/%m/%Y"))
-        e = ttk.Entry(f, textvariable=self.dia, width=14)
-        e.grid(row=0, column=1, padx=6)
+        campo = ttk.Frame(f)
+        campo.grid(row=0, column=1, padx=6)
+        e = ttk.Entry(campo, textvariable=self.dia, width=14)
+        e.pack(side="left")
+        self.btn_calendario = BotaoCalendario(campo, e, self.dia, maximo=date.today)
+        self.btn_calendario.pack(side="left", padx=(2, 0))
         ttk.Button(f, text="Hoje", width=7,
                    command=lambda: self.dia.set(date.today().strftime("%d/%m/%Y"))).grid(row=0, column=2)
         ttk.Button(f, text="Ontem", width=7,
@@ -120,9 +126,13 @@ class AbaBusca(ttk.Frame):
         _descricao(self, "Busca nas caixas do setor por etapa, fase, datas e mudanças de etapa. Gera uma "
                          "planilha com as abas Resultado, Transições e Parâmetros. Textos: sem diferença de "
                          "maiúsculas e acentos, \"contém\"; vários valores num campo, separados por ';', "
-                         "valem como OU. Datas: DD/MM/AAAA, hoje, ontem ou -N (N dias atrás). "
-                         "Ex.: \"Ainda não chegou a\" = Pesquisa de Mercado.")
+                         "valem como OU. Etapas: escolha na lista (ou digite parte do nome); para juntar "
+                         "outra, digite ';' depois da primeira e escolha de novo. A lista traz o fluxo da "
+                         "Abertura e as etapas que as buscas já encontraram.")
         self.v = {}
+        self.botoes_data = {}
+        self.combos_etapa = {}
+        self._texto_antes = {}
         self.janela_ajuda = None
         corpo = ttk.Frame(self)
         corpo.pack(fill="both", expand=True, padx=12)
@@ -145,32 +155,34 @@ class AbaBusca(ttk.Frame):
         # Etapa e posição
         e = ttk.LabelFrame(corpo, text="Etapa e posição")
         e.grid(row=1, column=0, sticky="nsew", pady=4, padx=(0, 6))
-        self._campo(e, 0, 0, "etapa", "Etapa atual contém:", 24)
+        self._campo_etapa(e, 0, 0, "etapa", "Etapa atual contém:", 24)
         self.v["etapa_exata"] = tk.BooleanVar()
         ttk.Checkbutton(e, text="nome exato", variable=self.v["etapa_exata"]).grid(row=0, column=2, sticky="w")
-        self._campo(e, 1, 0, "excluir_etapa", "Exceto a etapa:", 24)
+        self._campo_etapa(e, 1, 0, "excluir_etapa", "Exceto a etapa:", 24)
         ttk.Label(e, text="Fase:").grid(row=2, column=0, sticky="w", padx=8, pady=2)
         self.v["fase"] = tk.StringVar()
         ttk.Combobox(e, textvariable=self.v["fase"], values=("", "Elaboração", "Abertura"), width=14,
                      state="readonly").grid(row=2, column=1, sticky="w")
-        self._campo(e, 3, 0, "antes_de", "Ainda não chegou a:", 24)
-        self._campo(e, 4, 0, "a_partir_de", "Já chegou a:", 24)
-        self._campo(e, 5, 0, "passou_por", "Já passou por:", 24)
+        self._campo_etapa(e, 3, 0, "antes_de", "Ainda não chegou a:", 24)
+        self._campo_etapa(e, 4, 0, "a_partir_de", "Já chegou a:", 24)
+        self._campo_etapa(e, 5, 0, "passou_por", "Já passou por:", 24)
         self._campo(e, 6, 0, "dias_etapa_min", "Dias na etapa, mín.:", 6)
         self._campo(e, 7, 0, "dias_etapa_max", "Dias na etapa, máx.:", 6)
 
         # Datas
         d = ttk.LabelFrame(corpo, text="Datas e mudanças de etapa")
         d.grid(row=1, column=1, sticky="nsew", pady=4)
-        self._campo(d, 0, 0, "emissao_de", "Emitido de:", 11)
-        self._campo(d, 0, 2, "emissao_ate", "até:", 11)
-        self._campo(d, 1, 0, "mudanca_de", "Mudou de etapa de:", 11)
-        self._campo(d, 1, 2, "mudanca_ate", "até:", 11)
-        self._campo(d, 2, 0, "mudanca_para", "…para a etapa:", 24, span=3)
-        self._campo(d, 3, 0, "mudanca_origem", "…saindo da etapa:", 24, span=3)
-        self._campo(d, 4, 0, "entrada_de", "Entrou na etapa atual de:", 11)
-        self._campo(d, 4, 2, "entrada_ate", "até:", 11)
+        self._campo(d, 0, 0, "emissao_de", "Emitido de:", 11, data=True)
+        self._campo(d, 0, 2, "emissao_ate", "até:", 11, data=True)
+        self._campo(d, 1, 0, "mudanca_de", "Mudou de etapa de:", 11, data=True)
+        self._campo(d, 1, 2, "mudanca_ate", "até:", 11, data=True)
+        self._campo_etapa(d, 2, 0, "mudanca_para", "…para a etapa:", 24, span=3)
+        self._campo_etapa(d, 3, 0, "mudanca_origem", "…saindo da etapa:", 24, span=3)
+        self._campo(d, 4, 0, "entrada_de", "Entrou na etapa atual de:", 11, data=True)
+        self._campo(d, 4, 2, "entrada_ate", "até:", 11, data=True)
         self._campo(d, 5, 0, "sem_mov_min", "Parado há (dias), mín.:", 6)
+        self.dica_datas = ttk.Label(d, text=busca_argv.DICA_DATAS, foreground="#777", justify="left")
+        self.dica_datas.grid(row=6, column=0, columnspan=4, sticky="w", padx=8, pady=(4, 2))
 
         # Outros
         o = ttk.LabelFrame(corpo, text="Outros")
@@ -195,14 +207,52 @@ class AbaBusca(ttk.Frame):
         corpo.columnconfigure(0, weight=1)
         corpo.columnconfigure(1, weight=1)
 
-    def _campo(self, pai, linha, coluna, chave, rotulo, largura, dica=None, span=1):
+    def _campo(self, pai, linha, coluna, chave, rotulo, largura, dica=None, span=1, data=False):
         ttk.Label(pai, text=rotulo).grid(row=linha, column=coluna, sticky="w", padx=(8, 4), pady=2)
         self.v[chave] = tk.StringVar()
-        ttk.Entry(pai, textvariable=self.v[chave], width=largura).grid(row=linha, column=coluna + 1,
-                                                                      columnspan=span, sticky="w", pady=2)
+        if data:        # campo de data: com o botão do calendário ao lado
+            lugar = ttk.Frame(pai)
+            lugar.grid(row=linha, column=coluna + 1, columnspan=span, sticky="w", pady=2)
+            e = ttk.Entry(lugar, textvariable=self.v[chave], width=largura)
+            e.pack(side="left")
+            self.botoes_data[chave] = BotaoCalendario(lugar, e, self.v[chave])
+            self.botoes_data[chave].pack(side="left", padx=(2, 0))
+        else:
+            ttk.Entry(pai, textvariable=self.v[chave], width=largura).grid(row=linha, column=coluna + 1,
+                                                                          columnspan=span, sticky="w", pady=2)
         if dica:
             ttk.Label(pai, text=dica, foreground="#777").grid(row=linha, column=coluna + 1 + span,
                                                              sticky="w", padx=6)
+
+    def _campo_etapa(self, pai, linha, coluna, chave, rotulo, largura, span=1):
+        """Campo de etapa: lista suspensa com as etapas conhecidas, que também
+        aceita texto digitado (parte do nome, vários separados por ';')."""
+        ttk.Label(pai, text=rotulo).grid(row=linha, column=coluna, sticky="w", padx=(8, 4), pady=2)
+        self.v[chave] = tk.StringVar()
+        cb = ttk.Combobox(pai, textvariable=self.v[chave], width=largura, height=20, style="Etapa.TCombobox")
+        cb.configure(postcommand=lambda: self._abrir_etapas(cb))
+        cb.bind("<<ComboboxSelected>>", lambda _e: self._escolheu_etapa(cb, chave))
+        cb.grid(row=linha, column=coluna + 1, columnspan=span, sticky="w", pady=2)
+        self.combos_etapa[chave] = cb
+
+    def _abrir_etapas(self, cb):
+        """Ao abrir a lista: guarda o texto do campo (para juntar etapas) e
+        atualiza as opções, que crescem a cada busca."""
+        self._texto_antes[str(cb)] = cb.get()
+        etapas = busca_argv.etapas_conhecidas()
+        cb["values"] = etapas
+        # A lista aberta tem a largura do campo; alarga para o nome mais comprido
+        # caber (com a barra de rolagem), sem passar da borda da tela.
+        fonte = tkfont.nametofont("TkTextFont")
+        extra = max(0, max((fonte.measure(n) for n in etapas), default=0) + 32 - cb.winfo_width())
+        dx = min(0, cb.winfo_screenwidth() - (cb.winfo_rootx() + cb.winfo_width() + extra))
+        ttk.Style(cb).configure("Etapa.TCombobox", postoffset=(dx, 0, extra, 0))
+
+    def _escolheu_etapa(self, cb, chave):
+        antes = self._texto_antes.pop(str(cb), "")
+        cb.set(busca_argv.juntar_etapa(antes, cb.get(), varios=chave in busca_argv.TEXTOS_MULTIPLOS))
+        cb.selection_clear()
+        cb.icursor("end")
 
     def _escolher_numeros(self):
         c = filedialog.askopenfilename(title="Arquivo com números de processo",
@@ -266,7 +316,7 @@ class _AbaPlanilha(ttk.Frame):
     def __init__(self, pai, descricao):
         super().__init__(pai)
         _descricao(self, descricao)
-        f = ttk.Frame(self)
+        self.campos = f = ttk.Frame(self)
         f.pack(fill="x", padx=12, pady=6)
         ttk.Label(f, text="Planilha:").grid(row=0, column=0, sticky="w")
         self.planilha = tk.StringVar(value=config.carregar().get(self.chave_config, ""))
@@ -322,15 +372,60 @@ class AbaFaltantes(_AbaPlanilha):
 
     def __init__(self, pai):
         super().__init__(pai, "Procura, nas caixas do setor, os Proc. Administrativos de abertura, fase "
-                              "preparatória ou elaboração que estão ANTES da Pesquisa de Mercado e não estão "
-                              "na planilha de acompanhamento. Gera <planilha>_faltantes_….xlsx (a original "
-                              "não é alterada), com a aba \"Cancelados (conferir)\" quando houver. A 1ª "
-                              "execução lê os arquivados e demora; as seguintes usam o cache.")
+                              "preparatória ou elaboração emitidos no período que estão ANTES da Pesquisa de "
+                              "Mercado e não estão na planilha de acompanhamento. Gera "
+                              "<planilha>_faltantes_….xlsx (a original não é alterada), com a aba "
+                              "\"Cancelados (conferir)\" quando houver. A 1ª execução lê os arquivados e "
+                              "demora; as seguintes usam o cache.")
+        from .. import faltantes
+        self.mod = faltantes
+        cfg = config.carregar()
+        ttk.Label(self.campos, text="Emitidos de:").grid(row=2, column=0, sticky="w")
+        p = ttk.Frame(self.campos)
+        p.grid(row=2, column=1, columnspan=2, padx=6, sticky="w")
+        self.de = tk.StringVar(value=cfg["faltantes_de"])
+        e = ttk.Entry(p, textvariable=self.de, width=12)
+        e.pack(side="left")
+        self.btn_cal_de = BotaoCalendario(p, e, self.de, maximo=date.today)
+        self.btn_cal_de.pack(side="left", padx=(2, 0))
+        ttk.Label(p, text="até:").pack(side="left", padx=(10, 6))
+        self.ate = tk.StringVar(value=cfg["faltantes_ate"])
+        e = ttk.Entry(p, textvariable=self.ate, width=12)
+        e.pack(side="left")
+        self.btn_cal_ate = BotaoCalendario(p, e, self.ate)
+        self.btn_cal_ate.pack(side="left", padx=(2, 0))
+        ttk.Button(p, text="Padrão", width=8,
+                   command=lambda: (self.de.set(""), self.ate.set(""))).pack(side="left", padx=(10, 0))
+        self.leitura = ttk.Label(p, foreground="#555")
+        self.leitura.pack(side="left", padx=10)
+        ttk.Label(self.campos, text=f"{faltantes.FORMATOS_DATA}; vazio = padrão",
+                  foreground="#777").grid(row=3, column=1, columnspan=2, sticky="w", padx=6)
+        for v in (self.de, self.ate):
+            v.trace_add("write", lambda *_: self._mostrar_periodo())
+        self._mostrar_periodo()
+
+    def _mostrar_periodo(self):
+        hoje = date.today()
+        try:
+            de, ate = self.mod.ler_periodo(self.de.get(), self.ate.get(), hoje)
+        except ValueError as e:
+            self.leitura.config(text=str(e), foreground="#b00020")
+            return
+        inicio = f"{de:%d/%m/%Y}" if de else "1º/jan do ano mais antigo da planilha"
+        fim = f"{ate:%d/%m/%Y}" if ate and ate < hoje else f"hoje ({hoje:%d/%m/%Y})"
+        self.leitura.config(text=f"→ de {inicio} até {fim}", foreground="#555")
 
     def tarefa(self):
-        from .. import faltantes
+        try:
+            de, ate = self.mod.ler_periodo(self.de.get(), self.ate.get())
+        except ValueError as e:
+            raise FormularioInvalido(str(e)) from None
         caminho, aba = self._validar()
-        return ("Faltantes na planilha", lambda cred: faltantes.executar(caminho, aba, cred), True)
+        cfg = config.carregar()
+        cfg["faltantes_de"], cfg["faltantes_ate"] = self.de.get().strip(), self.ate.get().strip()
+        config.salvar(cfg)
+        return ("Faltantes na planilha",
+                lambda cred: self.mod.executar(caminho, aba, cred, de=de, ate=ate), True)
 
 
 class AbaVerificar(_AbaPlanilha):

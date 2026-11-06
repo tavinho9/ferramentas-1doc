@@ -136,11 +136,14 @@ class Resposta:
 
 
 class Fake1Doc:
-    """Roteador. `pedidos` guarda (método, pg/chamada) de cada requisição."""
+    """Roteador. `pedidos` guarda (método, pg/chamada) de cada requisição e
+    `intervalos`, o parâmetro intervalo de cada listagem (que o roteador,
+    como o servidor poderia fazer, ignora: a listagem traz sempre tudo)."""
 
     def __init__(self, logado=True):
         self.logado = logado
         self.pedidos = []
+        self.intervalos = []
 
     def __call__(self, sessao, metodo, url, params=None, data=None, **kw):
         q = {k: v[0] for k, v in parse_qs(urlparse(url).query, keep_blank_values=True).items()}
@@ -154,6 +157,7 @@ class Fake1Doc:
             destino = f"https://montesclaros.1doc.com.br/?pg=doc/ver&hash={h}&itd=3" if h else url
             return Resposta("<html></html>", destino)
         if q.get("chamada") == "caixa":
+            self.intervalos.append(q.get("intervalo"))
             return Resposta(listagem(q.get("caixa"), int(q.get("num_pagina", 1))), url)
         if q.get("pg") == "doc/ver":
             h = (q.get("hash") or "").upper()

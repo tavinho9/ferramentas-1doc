@@ -1,10 +1,11 @@
 """Funções puras: datas, critérios de etapa, formulário da busca, log."""
 
+import json
 from datetime import date, datetime
 
 import pytest
 
-from ferramentas1doc import busca_argv, processos_do_dia as pdd
+from ferramentas1doc import busca_argv, faltantes, processos_do_dia as pdd
 from ferramentas1doc.gui.log import TerminalEmMemoria
 
 HOJE = date(2026, 1, 15)
@@ -68,6 +69,66 @@ def test_montar_argv_todas_as_caixas_e_todas_prioridades():
     assert argv == ["--caixas", "todas"]
 
 
+@pytest.mark.parametrize("exemplo", busca_argv.EXEMPLOS_DATA)
+def test_busca_aceita_os_formatos_da_instrucao_de_datas(exemplo):
+    assert busca_argv.validar(["--emissao-de", exemplo, "--mudanca-ate", exemplo]) is None
+
+
+def test_instrucao_de_datas_da_busca():
+    for formato in ("DD/MM/AAAA", "AAAA-MM-DD", "hoje", "ontem", "-N"):
+        assert formato in busca_argv.DICA_DATAS
+    # a instrução pede o ano completo: sem ele, a busca recusa
+    assert "data inválida" in busca_argv.validar(["--emissao-de", "05/11"])
+
+
+ELABORACAO = ["Elaboração do DFD", "Elaboração do ETP", "Etapa Final"]
+
+
+def test_ordenar_etapas():
+    base = list(busca_argv.ETAPAS_BASE)
+    assert busca_argv.ordenar_etapas([]) == base
+    abertura_lida = [n.upper() if n == "Aprovação do COMPAC" else n for n in base]
+    abertura_lida[0] = "Validacao de  requisicao"              # grafia diferente, mesma etapa
+    etapas = busca_argv.ordenar_etapas([ELABORACAO, abertura_lida])
+    # o fluxo da Abertura primeiro, na ordem e com a grafia lida; depois as outras, sem repetir
+    assert etapas == ["Validacao de  requisicao", *base[1:5], "APROVAÇÃO DO COMPAC", "Etapa Final",
+                      "Elaboração do DFD", "Elaboração do ETP"]
+
+
+def test_etapas_conhecidas_do_cache(tmp_path):
+    arq = tmp_path / "1doc_cache.json"
+    assert busca_argv.etapas_conhecidas(str(arq)) == list(busca_argv.ETAPAS_BASE)      # sem cache
+    arq.write_text("{ quebrado", encoding="utf-8")
+    assert busca_argv.etapas_conhecidas(str(arq)) == list(busca_argv.ETAPAS_BASE)
+    det = {"3|1/2026": {"etapas_quadro": ELABORACAO}, "3|2/2026": {"etapas_quadro": ELABORACAO},
+           "3|3/2026": {"etapas_quadro": []}, "3|4/2026": {"numero": "sem quadro"}}
+    arq.write_text(json.dumps({"versao": "1.1", "det": det}), encoding="utf-8")
+    assert busca_argv.etapas_conhecidas(str(arq))[-2:] == ["Elaboração do DFD", "Elaboração do ETP"]
+    det["3|5/2026"] = {"etapas_quadro": ["Análise Jurídica", "Etapa Final"]}       # uma busca nova
+    arq.write_text(json.dumps({"versao": "1.1", "det": det}), encoding="utf-8")
+    assert busca_argv.etapas_conhecidas(str(arq))[-1] == "Análise Jurídica"
+
+
+@pytest.mark.parametrize("antes,escolhida,varios,esperado", [
+    ("", "Pesquisa de Mercado", True, "Pesquisa de Mercado"),
+    ("Pesquisa", "Pesquisa de Mercado", True, "Pesquisa de Mercado"),               # substitui
+    ("Pesquisa de Mercado;", "Consulta Orçamentária", True, "Pesquisa de Mercado; Consulta Orçamentária"),
+    ("Pesquisa de Mercado; ", "pesquisa de mercado", True, "Pesquisa de Mercado"),  # não repete
+    ("Pesquisa de Mercado;", "Consulta Orçamentária", False, "Consulta Orçamentária"),  # campo de uma só
+])
+def test_juntar_etapa(antes, escolhida, varios, esperado):
+    assert busca_argv.juntar_etapa(antes, escolhida, varios) == esperado
+
+
+def test_campos_de_etapa_viram_opcoes_da_busca():
+    for campo in busca_argv.CAMPOS_ETAPA:
+        assert campo in busca_argv.TEXTOS or campo in busca_argv.TEXTOS_MULTIPLOS
+    argv = busca_argv.montar_argv({"caixas": ["entrada"], "etapa": "Pesquisa de Mercado; Consulta Orçamentária",
+                                   "antes_de": "Pesquisa de Mercado"})
+    assert argv[2:] == ["--antes-de", "Pesquisa de Mercado", "--etapa", "Pesquisa de Mercado",
+                        "--etapa", "Consulta Orçamentária"]
+
+
 def test_montar_argv_erros():
     with pytest.raises(busca_argv.FormularioInvalido, match="caixa"):
         busca_argv.montar_argv({"caixas": []})
@@ -75,6 +136,52 @@ def test_montar_argv_erros():
         busca_argv.montar_argv({"caixas": ["entrada"], "dias_etapa_min": "dez"})
     assert "data inválida" in busca_argv.validar(["--emissao-de", "31/31/2026"])
     assert "--nao-existe" in busca_argv.validar(["--nao-existe"])
+
+
+@pytest.mark.parametrize("txt,esperado", [
+    ("", None), ("  ", None), (None, None),
+    ("hoje", HOJE), ("Ontem", date(2026, 1, 14)), ("-30", date(2025, 12, 16)), ("- 7", date(2026, 1, 8)),
+    ("01/01/2025", date(2025, 1, 1)), ("1/1/25", date(2025, 1, 1)), ("10/01", date(2026, 1, 10)),
+    ("20/12", date(2025, 12, 20)),          # sem ano e no futuro: ano anterior
+])
+def test_faltantes_ler_data(txt, esperado):
+    assert faltantes.ler_data(txt, HOJE) == esperado
+
+
+@pytest.mark.parametrize("txt", ["31/02/2026", "abc", "-99999999999", "2026"])
+def test_faltantes_ler_data_invalida(txt):
+    with pytest.raises(ValueError):
+        faltantes.ler_data(txt, HOJE)
+
+
+def test_faltantes_ler_periodo():
+    assert faltantes.ler_periodo("", "", HOJE) == (None, None)
+    assert faltantes.ler_periodo("01/12/2025", "ontem", HOJE) == (date(2025, 12, 1), date(2026, 1, 14))
+    assert faltantes.ler_periodo("", "31/12/2020", HOJE) == (None, date(2020, 12, 31))
+    with pytest.raises(ValueError, match="Data final não reconhecida"):
+        faltantes.ler_periodo("", "32/01/2026", HOJE)
+    with pytest.raises(ValueError, match="ainda não chegou"):
+        faltantes.ler_periodo("16/01/2026", "", HOJE)
+    with pytest.raises(ValueError, match="depois da final"):
+        faltantes.ler_periodo("10/01/2026", "09/01/2026", HOJE)
+
+
+def test_faltantes_resolver_periodo():
+    itens = [{"ano": "2026"}, {"ano": "2024"}]
+    assert faltantes.resolver_periodo(None, None, itens, HOJE) == (date(2024, 1, 1), HOJE)
+    assert faltantes.resolver_periodo(None, None, [], HOJE) == (date(2026, 1, 1), HOJE)
+    assert faltantes.resolver_periodo(date(2025, 6, 1), date(2027, 1, 1), itens, HOJE) == \
+        (date(2025, 6, 1), HOJE)                                    # fim no futuro: hoje
+    with pytest.raises(SystemExit, match="Período vazio"):
+        faltantes.resolver_periodo(None, date(2023, 12, 31), itens, HOJE)
+
+
+def test_faltantes_data_de_emissao_na_listagem():
+    html = ('<table><tr><td><a class="link_emissao_a" href="./?pg=doc/ver&hash=AAAA1111BBBB2222CCCC">'
+            'Proc. Administrativo 31.632/2026 <small class="data">05/11/2026 09:15</small></a></td></tr>'
+            '<tr><td><a class="link_emissao_a" href="./?pg=doc/ver&hash=DDDD3333EEEE4444FFFF">'
+            'Proc. Administrativo 31.700/2026</a></td></tr></table>')
+    assert [ln["emissao"] for ln in faltantes.linhas_listagem(html)] == [date(2026, 11, 5), None]
 
 
 def test_terminal_reescreve_linha_com_retorno_de_carro():
