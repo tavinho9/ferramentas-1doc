@@ -17,10 +17,8 @@ def janela(dados, cred, monkeypatch):
     from ferramentas1doc import processos_do_dia, sessao
     from ferramentas1doc.gui import janela as mod
     from ferramentas1doc.gui.log import SaidaFila
-    try:
-        tk.Tk().destroy()
-    except tk.TclError:
-        pytest.skip("sem tela para o Tk")
+    if os.name != "nt" and not os.environ.get("DISPLAY"):
+        pytest.skip("sem tela para o Tk (no Linux, rode com xvfb-run)")
 
     def obter_sessao(ao_esperar=None, **kw):
         ao_esperar(True)                    # como se o navegador tivesse aberto
