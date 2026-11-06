@@ -95,3 +95,132 @@ def test_busca_com_formulario_invalido(janela):
         v.set(False)
     janela._executar(aba)
     assert janela.executando is None and "caixa" in janela.avisos[0][1]
+
+
+def _processar(j, vezes=6):
+    for _ in range(vezes):
+        j.update()
+        time.sleep(0.05)
+
+
+def _dialogo_configuracoes(j):
+    from ferramentas1doc.gui import janela as mod
+    abertos = [w for w in j.winfo_children() if isinstance(w, mod.DialogoConfiguracoes)]
+    assert len(abertos) == 1, abertos
+    return abertos[0]
+
+
+def _principal_livre(j):
+    """Nem grab do Tk nem janela desabilitada: os dois fazem o Windows ignorar
+    minimizar e restaurar a principal (ver gui/secundaria.py)."""
+    return j.grab_current() is None and not (os.name == "nt" and int(j.attributes("-disabled")))
+
+
+def test_configuracoes_uma_so_presa_a_principal(janela):
+    j = janela
+    j._configuracoes()
+    _processar(j)
+    d = _dialogo_configuracoes(j)
+    j._configuracoes()                      # clicar de novo traz a mesma, não abre outra
+    _processar(j)
+    assert _dialogo_configuracoes(j) is d and j.dialogo_configuracoes is d
+    assert d.winfo_viewable()
+    assert str(d.transient()) == str(j)     # presa à principal: minimiza e volta junto
+    assert _principal_livre(j)
+    d.destroy()                             # Cancelar, Salvar, Esc e o X
+    _processar(j)
+    j._configuracoes()                      # fechada, abre de novo
+    _processar(j)
+    d2 = _dialogo_configuracoes(j)
+    assert d2 is not d and d2.winfo_viewable()
+    d2.destroy()
+    _processar(j)
+
+
+def test_opcoes_da_busca_uma_so_presa_a_principal(janela):
+    aba = janela.abas[1]
+    aba._ajuda()
+    _processar(janela)
+    o = aba.janela_ajuda
+    aba._ajuda()
+    _processar(janela)
+    assert aba.janela_ajuda is o
+    assert [w for w in aba.winfo_children() if isinstance(w, tk.Toplevel)] == [o]
+    assert str(o.transient()) == str(janela)
+    assert _principal_livre(janela)
+    o.destroy()
+    _processar(janela)
+    aba._ajuda()
+    _processar(janela)
+    assert aba.janela_ajuda is not o and aba.janela_ajuda.winfo_exists()
+    aba.janela_ajuda.destroy()
+    _processar(janela)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="minimizar e restaurar como o Windows faz (só no Windows)")
+@pytest.mark.parametrize("qual", ["Configurações", "Opções da busca"])
+def test_com_janela_secundaria_aberta_o_programa_minimiza_e_volta(janela, qual):
+    """Com a janela de Configurações aberta, o programa minimizado tem de voltar
+    pelo botão da barra de tarefas. Com um grab do Tk (e também com a principal
+    desabilitada), o Windows ignora os comandos de sistema da janela principal
+    (WM_SYSCOMMAND), inclusive o "restaurar": minimizada pelo Win+D, ela não
+    voltava mais."""
+    import ctypes
+    from ctypes import wintypes
+    user32 = ctypes.WinDLL("user32")
+    user32.SendMessageW.argtypes = (wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
+    user32.SendMessageW.restype = wintypes.LPARAM
+    user32.ShowWindow.argtypes = (wintypes.HWND, ctypes.c_int)
+    user32.IsIconic.argtypes = user32.IsWindowVisible.argtypes = (wintypes.HWND,)
+    user32.GetWindow.argtypes = (wintypes.HWND, wintypes.UINT)
+    user32.GetWindow.restype = wintypes.HWND
+    WM_SYSCOMMAND, SC_MINIMIZE, SC_RESTORE = 0x0112, 0xF020, 0xF120
+    SW_MINIMIZE, SW_RESTORE, GW_OWNER = 6, 9, 4
+
+    j = janela
+    principal = int(j.wm_frame(), 16)
+    if qual == "Configurações":
+        j._configuracoes()
+        _processar(j)
+        d = _dialogo_configuracoes(j)
+    else:
+        j.abas[1]._ajuda()
+        _processar(j)
+        d = j.abas[1].janela_ajuda
+
+    def moldura():
+        # o Tk recria a moldura (wrapper) da secundária quando a principal volta
+        return int(d.wm_frame(), 16)
+
+    def visivel_na_frente_da_principal():
+        return (d.winfo_viewable() and user32.IsWindowVisible(moldura())
+                and user32.GetWindow(moldura(), GW_OWNER) == principal)
+
+    try:
+        assert visivel_na_frente_da_principal()
+        # "Mostrar área de trabalho" (Win+D): minimiza sem passar por WM_SYSCOMMAND
+        user32.ShowWindow(principal, SW_MINIMIZE)
+        _processar(j)
+        assert user32.IsIconic(principal)
+        assert not user32.IsWindowVisible(moldura())        # some junto com a principal
+        # clique no botão do programa na barra de tarefas
+        user32.SendMessageW(principal, WM_SYSCOMMAND, SC_RESTORE, 0)
+        _processar(j)
+        assert not user32.IsIconic(principal), "o programa ficou preso minimizado"
+        assert j.state() == "normal"
+        assert visivel_na_frente_da_principal(), "a janela secundária não voltou"
+
+        # minimizar pela barra de tarefas e restaurar de novo
+        user32.SendMessageW(principal, WM_SYSCOMMAND, SC_MINIMIZE, 0)
+        _processar(j)
+        assert user32.IsIconic(principal), "o comando de minimizar foi ignorado"
+        assert not user32.IsWindowVisible(moldura())
+        user32.SendMessageW(principal, WM_SYSCOMMAND, SC_RESTORE, 0)
+        _processar(j)
+        assert not user32.IsIconic(principal), "o programa ficou preso minimizado"
+        assert visivel_na_frente_da_principal(), "a janela secundária não voltou"
+    finally:
+        user32.ShowWindow(principal, SW_RESTORE)
+        d.destroy()
+        _processar(j)
+

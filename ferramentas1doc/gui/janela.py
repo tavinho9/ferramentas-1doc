@@ -12,6 +12,7 @@ from tkinter import filedialog, messagebox, ttk
 from .. import NOME_APP, VERSAO, caminhos, config, sessao
 from .abas import ABAS, FormularioInvalido
 from .log import SaidaFila, Terminal
+from .secundaria import JanelaSecundaria, abrir_unica
 
 COR_OK, COR_AVISO, COR_ERRO, COR_NEUTRA = "#1b7f3b", "#9a6700", "#b00020", "#555555"
 
@@ -32,6 +33,7 @@ class Janela(tk.Tk):
         self.eventos = queue.Queue()      # avisos das threads para a janela
         self.executando = None            # thread da tarefa em curso
         self.ultimo_arquivo = None
+        self.dialogo_configuracoes = None
         self.title(f"{NOME_APP} — Prefeitura de Montes Claros  (v{VERSAO})")
         self.geometry("1100x920")
         self.minsize(960, 700)
@@ -293,14 +295,13 @@ class Janela(tk.Tk):
 
     # ---------------------------------------------------------- configurações
     def _configuracoes(self):
-        DialogoConfiguracoes(self)
+        self.dialogo_configuracoes = abrir_unica(self.dialogo_configuracoes,
+                                                 lambda: DialogoConfiguracoes(self))
 
 
-class DialogoConfiguracoes(tk.Toplevel):
+class DialogoConfiguracoes(JanelaSecundaria):
     def __init__(self, pai):
-        super().__init__(pai)
-        self.title("Configurações")
-        self.transient(pai)
+        super().__init__(pai, "Configurações")
         self.resizable(False, False)
         self.cfg = config.carregar()
         f = ttk.Frame(self, padding=14)
@@ -339,7 +340,7 @@ class DialogoConfiguracoes(tk.Toplevel):
         b.grid(row=7, column=0, columnspan=3, sticky="e", pady=(14, 0))
         ttk.Button(b, text="Cancelar", command=self.destroy).pack(side="right")
         ttk.Button(b, text="Salvar", command=self._salvar).pack(side="right", padx=6)
-        self.grab_set()
+        self.mostrar()
 
     def _escolher(self):
         p = filedialog.askdirectory(title="Pasta das planilhas", parent=self,

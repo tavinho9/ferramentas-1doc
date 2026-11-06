@@ -11,6 +11,7 @@ from datetime import date, datetime, timedelta
 from tkinter import filedialog, ttk
 
 from .. import busca_argv, caminhos, config
+from .secundaria import JanelaSecundaria, abrir_unica
 
 DIAS_SEMANA = ("segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira",
                "sábado", "domingo")
@@ -122,6 +123,7 @@ class AbaBusca(ttk.Frame):
                          "valem como OU. Datas: DD/MM/AAAA, hoje, ontem ou -N (N dias atrás). "
                          "Ex.: \"Ainda não chegou a\" = Pesquisa de Mercado.")
         self.v = {}
+        self.janela_ajuda = None
         corpo = ttk.Frame(self)
         corpo.pack(fill="both", expand=True, padx=12)
 
@@ -210,10 +212,11 @@ class AbaBusca(ttk.Frame):
             self.v["numeros_arquivo"].set(os.path.normpath(c))
 
     def _ajuda(self):
+        self.janela_ajuda = abrir_unica(self.janela_ajuda, self._criar_ajuda)
+
+    def _criar_ajuda(self):
         from .. import busca
-        janela = tk.Toplevel(self)
-        janela.title("Opções da busca")
-        janela.geometry("900x620")
+        janela = JanelaSecundaria(self, "Opções da busca")
         t = tk.Text(janela, wrap="none", font=("Consolas", 9))
         sb = ttk.Scrollbar(janela, command=t.yview)
         t.configure(yscrollcommand=sb.set)
@@ -224,6 +227,8 @@ class AbaBusca(ttk.Frame):
                         "Textos com espaço vão entre aspas: --cita-setor \"SPOT-DCL-GP-CPPFI\"\n\n"
                  + busca.montar_parser().format_help())
         t.configure(state="disabled")
+        janela.mostrar(900, 620)
+        return janela
 
     def formulario(self):
         dados = {k: v.get() for k, v in self.v.items()}

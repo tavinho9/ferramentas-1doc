@@ -40,7 +40,7 @@ def autoteste(relatorio=None, navegador=True, janela=True):
         import ferramentas1doc
         from ferramentas1doc import caminhos
         for m in ("busca", "busca_argv", "config", "faltantes", "processos_do_dia", "sessao",
-                  "verificar_planilha", "gui.janela", "gui.abas", "gui.log"):
+                  "verificar_planilha", "gui.janela", "gui.abas", "gui.log", "gui.secundaria"):
             importlib.import_module(f"ferramentas1doc.{m}")
         return f"versão {ferramentas1doc.VERSAO}, dados em {caminhos.pasta_dados()}"
 
