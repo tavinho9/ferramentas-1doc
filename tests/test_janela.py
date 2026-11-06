@@ -12,13 +12,25 @@ tk = pytest.importorskip("tkinter")
 import fake1doc  # noqa: E402
 
 
-@pytest.fixture
-def janela(dados, cred, monkeypatch):
-    from ferramentas1doc import processos_do_dia, sessao
-    from ferramentas1doc.gui import janela as mod
-    from ferramentas1doc.gui.log import SaidaFila
+@pytest.fixture(scope="module")
+def _janela_unica():
+    """Uma janela só para todos os testes. No Windows, criar um segundo Tk no
+    mesmo processo depois de fechar o primeiro às vezes quebra o Tcl
+    ("invalid command name tcl_findLibrary"). O programa nunca faz isso: ele
+    abre uma única janela por execução."""
     if os.name != "nt" and not os.environ.get("DISPLAY"):
         pytest.skip("sem tela para o Tk (no Linux, rode com xvfb-run)")
+    from ferramentas1doc.gui import janela as mod
+    from ferramentas1doc.gui.log import SaidaFila
+    j = mod.Janela(SaidaFila())
+    yield j
+    j.destroy()
+
+
+@pytest.fixture
+def janela(_janela_unica, dados, cred, monkeypatch):
+    from ferramentas1doc import processos_do_dia, sessao
+    from ferramentas1doc.gui import janela as mod
 
     def obter_sessao(ao_esperar=None, **kw):
         ao_esperar(True)                    # como se o navegador tivesse aberto
@@ -30,10 +42,10 @@ def janela(dados, cred, monkeypatch):
     fake1doc.instalar(monkeypatch)
     avisos = []
     monkeypatch.setattr(mod.messagebox, "showwarning", lambda *a, **k: avisos.append(a))
-    j = mod.Janela(SaidaFila())
+    j = _janela_unica
     j.avisos = avisos
-    yield j
-    j.destroy()
+    j.ultimo_arquivo = None
+    return j
 
 
 def _esperar_fim(j, limite=30):
