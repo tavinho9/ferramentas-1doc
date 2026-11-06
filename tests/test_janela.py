@@ -260,6 +260,8 @@ def test_calendario_semanas_e_leitura():
                           ("2026-11-05", date(2026, 11, 5)), ("hoje", hoje), ("ontem", date(2026, 11, 5)),
                           ("-7", date(2026, 10, 30)), ("", None), ("31/02/2026", None), ("xyz", None)):
         assert cal.ler_data_qualquer(txt, hoje) == esperado, txt
+    assert cal.anos_da_decada(2025) == list(range(2019, 2031))     # a década, com um ano de cada vizinha
+    assert cal.anos_da_decada(2030)[1] == 2030 and cal.MESES_CURTOS[2] == "mar"
 
 
 def _abrir_calendario(j, botao):
@@ -286,11 +288,11 @@ def test_calendario_escolhe_o_dia_no_campo(janela):
     try:
         var.set("05/03/2025")
         c = _abrir_calendario(j, aba.botoes_data["emissao_de"])
-        assert (c.ano, c.mes) == (2025, 3) and c.titulo.cget("text") == "março de 2025"
+        assert (c.ano, c.mes) == (2025, 3) and c.titulo.cget("text") == "março de 2025 ▾"
         assert j.grab_current() is c                    # clique fora dele cai nele (e o fecha)
         c.btn_seguinte.invoke()
         c.btn_seguinte.invoke()
-        assert c.titulo.cget("text") == "maio de 2025"
+        assert c.titulo.cget("text") == "maio de 2025 ▾"
         _celula(c, date(2025, 5, 20)).event_generate("<Button-1>")
         _processar(j)
         assert var.get() == "20/05/2025" and Calendario.aberto is None and j.grab_current() is None
@@ -315,6 +317,133 @@ def test_calendario_escolhe_o_dia_no_campo(janela):
         Calendario.fechar_aberto()
         var.set("")
         j.notebook.select(0)
+        _processar(j)
+    assert _principal_livre(j)
+
+
+def _casa(c, chave):
+    """A casa da grade de meses ((ano, mês)) ou de anos (ano)."""
+    return c.celulas_lista[c.itens.index(chave)]
+
+
+def _clicar(j, widget):
+    widget.event_generate("<Button-1>")
+    _processar(j, 2)
+
+
+def test_calendario_titulo_leva_aos_meses_e_aos_anos(janela):
+    from ferramentas1doc.gui.calendario import Calendario
+    j = janela
+    j.notebook.select(1)
+    aba = j.abas[1]
+    var = aba.v["emissao_ate"]
+    try:
+        var.set("05/03/2025")
+        c = _abrir_calendario(j, aba.botoes_data["emissao_ate"])
+        tamanho = (c.winfo_width(), c.winfo_height())
+        _clicar(j, c.titulo)                            # o título abre os meses do ano
+        assert c.vista == "meses" and c.titulo.cget("text") == "2025 ▾"
+        assert c.grade_lista.winfo_ismapped() and not c.grade_dias.winfo_ismapped()
+        assert c.itens == [(2025, m) for m in range(1, 13)] and _casa(c, (2025, 1)).cget("text") == "jan"
+        assert _casa(c, (2025, 3)).cget("background") == "#1f6fc5"       # o mês da data do campo
+        _clicar(j, c.titulo)                            # e o dele, os anos da década
+        assert c.vista == "anos" and c.titulo.cget("text") == "2020–2029" and c.itens[0] == 2019
+        assert (c.winfo_width(), c.winfo_height()) == tamanho              # as grades têm o mesmo tamanho
+        _clicar(j, c.titulo)                            # acima dos anos não há nada
+        assert c.vista == "anos"
+        c.btn_anterior.invoke()
+        assert c.titulo.cget("text") == "2010–2019"
+        _clicar(j, _casa(c, 2018))                      # o ano abre os meses dele
+        assert c.vista == "meses" and c.ano == 2018 and Calendario.aberto is c
+        c.btn_seguinte.invoke()                         # ◀ ▶ passam o ano
+        c.btn_anterior.invoke()
+        assert c.titulo.cget("text") == "2018 ▾"
+        _clicar(j, _casa(c, (2018, 8)))                 # e o mês, os dias dele
+        assert c.vista == "dias" and c.titulo.cget("text") == "agosto de 2018 ▾"
+        assert c.grade_dias.winfo_ismapped() and not c.grade_lista.winfo_ismapped()
+        assert c.foco == date(2018, 8, 5) and var.get() == "05/03/2025"   # só o dia escreve no campo
+        assert (c.winfo_width(), c.winfo_height()) == tamanho
+        _clicar(j, _celula(c, date(2018, 8, 20)))
+        assert var.get() == "20/08/2018" and Calendario.aberto is None
+    finally:
+        Calendario.fechar_aberto()
+        var.set("")
+        j.notebook.select(0)
+        _processar(j)
+    assert _principal_livre(j)
+
+
+def test_calendario_teclado_nos_meses_e_anos(janela):
+    from ferramentas1doc.gui.calendario import Calendario
+    j = janela
+    aba = j.abas[1]
+    var = aba.v["entrada_de"]
+    try:
+        var.set("31/01/2024")
+        c = _abrir_calendario(j, aba.botoes_data["entrada_de"])
+        c.event_generate("<Shift-Next>")                # Shift+PageDown: um ano à frente
+        assert c.foco == date(2025, 1, 31) and (c.ano, c.mes) == (2025, 1)
+        c.event_generate("<Next>")                      # PageDown: o mês (31/jan → 28/fev)
+        assert c.foco == date(2025, 2, 28)
+        c.event_generate("<Shift-Prior>")
+        assert c.foco == date(2024, 2, 28)
+        _clicar(j, c.titulo)
+        c.event_generate("<Right>")                     # nos meses, as setas andam de mês
+        c.event_generate("<Down>")                      # e de linha (4 meses)
+        assert c.foco == date(2024, 7, 28) and c.vista == "meses"
+        c.event_generate("<Next>")                      # PageDown: o ano
+        assert c.foco == date(2025, 7, 28) and c.titulo.cget("text") == "2025 ▾"
+        _clicar(j, c.titulo)
+        c.event_generate("<Left>")                      # nos anos, de ano
+        assert c.foco == date(2024, 7, 28) and c.vista == "anos"
+        c.event_generate("<Return>")                    # Enter abre o ano...
+        assert c.vista == "meses" and c.ano == 2024
+        c.event_generate("<Return>")                    # ...e o mês
+        assert c.vista == "dias" and (c.ano, c.mes) == (2024, 7)
+        c.event_generate("<Return>")                    # e escolhe o dia
+        _processar(j)
+        assert var.get() == "28/07/2024" and Calendario.aberto is None
+
+        c = _abrir_calendario(j, aba.botoes_data["entrada_de"])
+        _clicar(j, c.titulo)
+        c.event_generate("<Escape>")                    # Esc fecha de qualquer grade, sem mudar
+        _processar(j)
+        assert var.get() == "28/07/2024" and Calendario.aberto is None
+    finally:
+        Calendario.fechar_aberto()
+        var.set("")
+        _processar(j)
+    assert _principal_livre(j)
+
+
+def test_calendario_meses_e_anos_respeitam_o_maximo(janela):
+    from ferramentas1doc.gui.calendario import Calendario
+    j = janela
+    aba = j.abas[0]                                     # Processos do dia: até hoje
+    hoje = date.today()
+    try:
+        aba.dia.set("")
+        c = _abrir_calendario(j, aba.btn_calendario)
+        _clicar(j, c.titulo)
+        assert c.btn_seguinte.instate(["disabled"]) and not c.btn_anterior.instate(["disabled"])
+        if hoje.month < 12:                             # o mês que vem não se abre
+            _clicar(j, _casa(c, (hoje.year, hoje.month + 1)))
+            assert c.vista == "meses" and _casa(c, (hoje.year, 12)).cget("cursor") == "arrow"
+        _clicar(j, c.titulo)
+        assert c.btn_seguinte.instate(["disabled"])     # a década que vem, toda no futuro
+        _clicar(j, _casa(c, hoje.year + 1))             # nem o ano que vem
+        assert c.vista == "anos" and _casa(c, hoje.year + 1).cget("cursor") == "arrow"
+        c.event_generate("<Shift-Next>")                # nem pelo teclado
+        assert c.foco <= hoje
+        _clicar(j, _casa(c, hoje.year))
+        _clicar(j, _casa(c, (hoje.year, hoje.month)))
+        assert c.vista == "dias" and (c.ano, c.mes) == (hoje.year, hoje.month) and c.foco <= hoje
+        c.event_generate("<Return>")
+        _processar(j)
+        assert aba.dia.get() == f"{c.foco:%d/%m/%Y}" and Calendario.aberto is None
+    finally:
+        Calendario.fechar_aberto()
+        aba.dia.set(f"{hoje:%d/%m/%Y}")
         _processar(j)
     assert _principal_livre(j)
 
