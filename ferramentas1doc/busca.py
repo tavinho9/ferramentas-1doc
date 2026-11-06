@@ -1503,7 +1503,7 @@ def montar_parser() -> argparse.ArgumentParser:
   Fase de Abertura há 15+ dias na mesma etapa, urgentes primeiro:
     --fase Abertura --dias-etapa-min 15 --ordenar prioridade,dias_etapa:desc
   Regra da CPPFI (antes da Pesquisa de Mercado, ou depois mas com o último despacho citando a CPPFI):
-    --antes-de "Pesquisa de Mercado" --excecao-cita-setor SPOT-DCL-GP-CPPFI --pessoa "João Otávio"
+    --antes-de "Pesquisa de Mercado" --excecao-cita-setor SPOT-DCL-GP-CPPFI --pessoa "Fulano de Tal"
   Processos de uma planilha/lista, sem varrer as caixas:
     --numeros-arquivo acompanhamento.xlsx
   Refiltrar sem acessar o 1Doc (usa o cache da última coleta):

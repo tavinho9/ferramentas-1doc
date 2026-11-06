@@ -55,12 +55,12 @@ def test_montar_argv_completo():
             "etapa": "Pesquisa de Mercado; Consulta Orçamentária", "fase": "Abertura",
             "antes_de": "Pesquisa de Mercado", "emissao_de": "01/10/2026", "dias_etapa_min": "15",
             "prioridade": ["Urgente", "Alta"], "objeto": "medicamento", "refazer": True,
-            "extras": '--setor-etapa CPPFI --numeros-arquivo "C:\\Users\\joao\\Área de Trabalho\\x.xlsx"'}
+            "extras": '--setor-etapa CPPFI --numeros-arquivo "C:\\Users\\usuario\\Área de Trabalho\\x.xlsx"'}
     argv = busca_argv.montar_argv(form, pasta_saida="C:\\saida", agora=datetime(2026, 11, 6, 9, 5))
     assert argv[:4] == ["--caixas", "entrada,arquivo", "--numeros", "31.632/2026,5712/2025"]
     assert argv.count("--etapa") == 2
     assert ["--prioridade", "Urgente,Alta"] == argv[argv.index("--prioridade"):argv.index("--prioridade") + 2]
-    assert argv[-2:] == ["--numeros-arquivo", "C:\\Users\\joao\\Área de Trabalho\\x.xlsx"]
+    assert argv[-2:] == ["--numeros-arquivo", "C:\\Users\\usuario\\Área de Trabalho\\x.xlsx"]
     assert busca_argv.validar(argv) is None
 
 
