@@ -29,7 +29,7 @@ jobs:
       - name: Testes (inclui login com Chrome real e a janela)
         env:
           AUTOTESTE_NAVEGADOR_REAL: "1"
-        run: python -m pytest -q tests
+        run: python -m pytest -q -rs tests
 
       - name: Versão
         id: versao
