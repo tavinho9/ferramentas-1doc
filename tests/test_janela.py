@@ -127,6 +127,11 @@ def test_configuracoes_uma_so_presa_a_principal(janela):
     assert d.winfo_viewable()
     assert str(d.transient()) == str(j)     # presa à principal: minimiza e volta junto
     assert _principal_livre(j)
+    d.withdraw()                            # o Windows a esconde com a principal minimizada…
+    _processar(j)
+    j.event_generate("<Map>")               # …e, quando a principal volta, ela volta junto
+    _processar(j)
+    assert d.winfo_viewable()
     d.destroy()                             # Cancelar, Salvar, Esc e o X
     _processar(j)
     j._configuracoes()                      # fechada, abre de novo
