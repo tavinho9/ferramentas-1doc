@@ -12,6 +12,7 @@ from tkinter import filedialog, ttk
 from tkinter import font as tkfont
 
 from .. import busca_argv, caminhos, config
+from .calendario import BotaoCalendario
 from .secundaria import JanelaSecundaria, abrir_unica
 
 DIAS_SEMANA = ("segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira",
@@ -58,8 +59,12 @@ class AbaProcessosDoDia(ttk.Frame):
         f.pack(fill="x", padx=12, pady=6)
         ttk.Label(f, text="Dia de emissão:").grid(row=0, column=0, sticky="w")
         self.dia = tk.StringVar(value=date.today().strftime("%d/%m/%Y"))
-        e = ttk.Entry(f, textvariable=self.dia, width=14)
-        e.grid(row=0, column=1, padx=6)
+        campo = ttk.Frame(f)
+        campo.grid(row=0, column=1, padx=6)
+        e = ttk.Entry(campo, textvariable=self.dia, width=14)
+        e.pack(side="left")
+        self.btn_calendario = BotaoCalendario(campo, e, self.dia, maximo=date.today)
+        self.btn_calendario.pack(side="left", padx=(2, 0))
         ttk.Button(f, text="Hoje", width=7,
                    command=lambda: self.dia.set(date.today().strftime("%d/%m/%Y"))).grid(row=0, column=2)
         ttk.Button(f, text="Ontem", width=7,
@@ -125,6 +130,7 @@ class AbaBusca(ttk.Frame):
                          "outra, digite ';' depois da primeira e escolha de novo. A lista traz o fluxo da "
                          "Abertura e as etapas que as buscas já encontraram.")
         self.v = {}
+        self.botoes_data = {}
         self.combos_etapa = {}
         self._texto_antes = {}
         self.janela_ajuda = None
@@ -166,14 +172,14 @@ class AbaBusca(ttk.Frame):
         # Datas
         d = ttk.LabelFrame(corpo, text="Datas e mudanças de etapa")
         d.grid(row=1, column=1, sticky="nsew", pady=4)
-        self._campo(d, 0, 0, "emissao_de", "Emitido de:", 11)
-        self._campo(d, 0, 2, "emissao_ate", "até:", 11)
-        self._campo(d, 1, 0, "mudanca_de", "Mudou de etapa de:", 11)
-        self._campo(d, 1, 2, "mudanca_ate", "até:", 11)
+        self._campo(d, 0, 0, "emissao_de", "Emitido de:", 11, data=True)
+        self._campo(d, 0, 2, "emissao_ate", "até:", 11, data=True)
+        self._campo(d, 1, 0, "mudanca_de", "Mudou de etapa de:", 11, data=True)
+        self._campo(d, 1, 2, "mudanca_ate", "até:", 11, data=True)
         self._campo_etapa(d, 2, 0, "mudanca_para", "…para a etapa:", 24, span=3)
         self._campo_etapa(d, 3, 0, "mudanca_origem", "…saindo da etapa:", 24, span=3)
-        self._campo(d, 4, 0, "entrada_de", "Entrou na etapa atual de:", 11)
-        self._campo(d, 4, 2, "entrada_ate", "até:", 11)
+        self._campo(d, 4, 0, "entrada_de", "Entrou na etapa atual de:", 11, data=True)
+        self._campo(d, 4, 2, "entrada_ate", "até:", 11, data=True)
         self._campo(d, 5, 0, "sem_mov_min", "Parado há (dias), mín.:", 6)
         self.dica_datas = ttk.Label(d, text=busca_argv.DICA_DATAS, foreground="#777", justify="left")
         self.dica_datas.grid(row=6, column=0, columnspan=4, sticky="w", padx=8, pady=(4, 2))
@@ -201,11 +207,19 @@ class AbaBusca(ttk.Frame):
         corpo.columnconfigure(0, weight=1)
         corpo.columnconfigure(1, weight=1)
 
-    def _campo(self, pai, linha, coluna, chave, rotulo, largura, dica=None, span=1):
+    def _campo(self, pai, linha, coluna, chave, rotulo, largura, dica=None, span=1, data=False):
         ttk.Label(pai, text=rotulo).grid(row=linha, column=coluna, sticky="w", padx=(8, 4), pady=2)
         self.v[chave] = tk.StringVar()
-        ttk.Entry(pai, textvariable=self.v[chave], width=largura).grid(row=linha, column=coluna + 1,
-                                                                      columnspan=span, sticky="w", pady=2)
+        if data:        # campo de data: com o botão do calendário ao lado
+            lugar = ttk.Frame(pai)
+            lugar.grid(row=linha, column=coluna + 1, columnspan=span, sticky="w", pady=2)
+            e = ttk.Entry(lugar, textvariable=self.v[chave], width=largura)
+            e.pack(side="left")
+            self.botoes_data[chave] = BotaoCalendario(lugar, e, self.v[chave])
+            self.botoes_data[chave].pack(side="left", padx=(2, 0))
+        else:
+            ttk.Entry(pai, textvariable=self.v[chave], width=largura).grid(row=linha, column=coluna + 1,
+                                                                          columnspan=span, sticky="w", pady=2)
         if dica:
             ttk.Label(pai, text=dica, foreground="#777").grid(row=linha, column=coluna + 1 + span,
                                                              sticky="w", padx=6)
@@ -370,10 +384,16 @@ class AbaFaltantes(_AbaPlanilha):
         p = ttk.Frame(self.campos)
         p.grid(row=2, column=1, columnspan=2, padx=6, sticky="w")
         self.de = tk.StringVar(value=cfg["faltantes_de"])
-        ttk.Entry(p, textvariable=self.de, width=12).pack(side="left")
+        e = ttk.Entry(p, textvariable=self.de, width=12)
+        e.pack(side="left")
+        self.btn_cal_de = BotaoCalendario(p, e, self.de, maximo=date.today)
+        self.btn_cal_de.pack(side="left", padx=(2, 0))
         ttk.Label(p, text="até:").pack(side="left", padx=(10, 6))
         self.ate = tk.StringVar(value=cfg["faltantes_ate"])
-        ttk.Entry(p, textvariable=self.ate, width=12).pack(side="left")
+        e = ttk.Entry(p, textvariable=self.ate, width=12)
+        e.pack(side="left")
+        self.btn_cal_ate = BotaoCalendario(p, e, self.ate)
+        self.btn_cal_ate.pack(side="left", padx=(2, 0))
         ttk.Button(p, text="Padrão", width=8,
                    command=lambda: (self.de.set(""), self.ate.set(""))).pack(side="left", padx=(10, 0))
         self.leitura = ttk.Label(p, foreground="#555")

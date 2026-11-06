@@ -50,6 +50,14 @@ do Windows → Aplicativos → Ferramentas 1Doc → Desinstalar.
 4. A planilha sai na pasta configurada (padrão: Área de Trabalho) e abre no
    Excel ao terminar. Isso pode ser desligado em **Configurações**.
 
+Os campos de data têm, ao lado, um botão de calendário: ele abre o mês logo
+abaixo do campo, e clicar num dia escreve a data (DD/MM/AAAA). As setas do
+teclado mudam o dia, PageUp/PageDown o mês e Enter escolhe. Esc ou um clique
+fora fecham o calendário sem mudar nada, e **Limpar** esvazia o campo. Onde uma
+data futura não vale (o dia em *Processos do dia* e o início do período em
+*Faltantes*), os dias depois de hoje aparecem apagados. Digitar a data continua
+valendo, com os mesmos formatos de antes.
+
 Se a janela estiver pequena (ou o Windows usar escala de 125–150%), o
 formulário da aba ganha barra de rolagem, e a roda do mouse rola o formulário.
 O botão **Executar** e as *Mensagens* continuam sempre à vista. O divisor entre

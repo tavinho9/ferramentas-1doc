@@ -247,6 +247,103 @@ def test_janela_pequena_rola_a_aba_e_mostra_o_executar(janela):
         assert j.painel.sashpos(0) == j.notebook.winfo_reqheight()
 
 
+def test_calendario_semanas_e_leitura():
+    from ferramentas1doc.gui import calendario as cal
+    sem = cal.semanas(2026, 11)                        # novembro de 2026 começa num domingo
+    assert len(sem) == 6 and all(len(s_) == 7 for s_ in sem)
+    assert sem[0][0] == date(2026, 11, 1) and all(d.weekday() == 6 for d in (s_[0] for s_ in sem))
+    assert date(2026, 11, 30) in sem[4]
+    sem = cal.semanas(2026, 8)                         # agosto: começa no sábado, ocupa as 6 semanas
+    assert sem[0][0] == date(2026, 7, 26) and sem[5][-1] == date(2026, 9, 5)
+    hoje = date(2026, 11, 6)
+    for txt, esperado in (("05/11/2026", date(2026, 11, 5)), ("5/11/26", date(2026, 11, 5)),
+                          ("2026-11-05", date(2026, 11, 5)), ("hoje", hoje), ("ontem", date(2026, 11, 5)),
+                          ("-7", date(2026, 10, 30)), ("", None), ("31/02/2026", None), ("xyz", None)):
+        assert cal.ler_data_qualquer(txt, hoje) == esperado, txt
+
+
+def _abrir_calendario(j, botao):
+    from ferramentas1doc.gui.calendario import Calendario
+    botao.invoke()
+    _processar(j, 8)
+    c = Calendario.aberto
+    assert c is not None and c.winfo_viewable()
+    return c
+
+
+def _celula(c, dia):
+    return c.celulas[c.dias.index(dia)]
+
+
+def test_calendario_escolhe_o_dia_no_campo(janela):
+    from ferramentas1doc.gui.calendario import Calendario
+    j = janela
+    j.notebook.select(1)
+    aba = j.abas[1]
+    assert set(aba.botoes_data) == {"emissao_de", "emissao_ate", "mudanca_de", "mudanca_ate", "entrada_de",
+                                    "entrada_ate"}
+    var = aba.v["emissao_de"]
+    try:
+        var.set("05/03/2025")
+        c = _abrir_calendario(j, aba.botoes_data["emissao_de"])
+        assert (c.ano, c.mes) == (2025, 3) and c.titulo.cget("text") == "março de 2025"
+        assert j.grab_current() is c                    # clique fora dele cai nele (e o fecha)
+        c.btn_seguinte.invoke()
+        c.btn_seguinte.invoke()
+        assert c.titulo.cget("text") == "maio de 2025"
+        _celula(c, date(2025, 5, 20)).event_generate("<Button-1>")
+        _processar(j)
+        assert var.get() == "20/05/2025" and Calendario.aberto is None and j.grab_current() is None
+
+        c = _abrir_calendario(j, aba.botoes_data["emissao_de"])
+        assert c.escolhida == date(2025, 5, 20)
+        c.event_generate("<Escape>")                    # Esc fecha sem mudar
+        _processar(j)
+        assert var.get() == "20/05/2025" and Calendario.aberto is None
+
+        c = _abrir_calendario(j, aba.botoes_data["emissao_de"])
+        c.event_generate("<ButtonPress-1>", x=-50, y=-50, rootx=c.winfo_rootx() - 50,
+                         rooty=c.winfo_rooty() - 50)    # clique fora fecha sem mudar
+        _processar(j)
+        assert var.get() == "20/05/2025" and Calendario.aberto is None
+
+        c = _abrir_calendario(j, aba.botoes_data["emissao_de"])
+        c.btn_limpar.invoke()
+        _processar(j)
+        assert var.get() == "" and Calendario.aberto is None
+    finally:
+        Calendario.fechar_aberto()
+        var.set("")
+        j.notebook.select(0)
+        _processar(j)
+    assert _principal_livre(j)
+
+
+def test_calendario_nao_deixa_escolher_o_futuro_onde_ele_nao_vale(janela):
+    from ferramentas1doc.gui.calendario import Calendario
+    j = janela
+    aba = j.abas[0]                                     # Processos do dia
+    hoje = date.today()
+    try:
+        aba.dia.set("")
+        c = _abrir_calendario(j, aba.btn_calendario)
+        assert (c.ano, c.mes) == (hoje.year, hoje.month)
+        _celula(c, hoje + timedelta(days=1)).event_generate("<Button-1>")
+        _processar(j)
+        assert aba.dia.get() == "" and Calendario.aberto is c       # amanhã não se escolhe
+        assert c.btn_seguinte.instate(["disabled"])
+        c.btn_hoje.invoke()
+        _processar(j)
+        assert aba.dia.get() == f"{hoje:%d/%m/%Y}" and Calendario.aberto is None
+        c = _abrir_calendario(j, j.abas[2].btn_cal_ate)  # Faltantes, "até": o futuro vale (vira hoje)
+        assert not c.btn_seguinte.instate(["disabled"])
+    finally:
+        Calendario.fechar_aberto()
+        aba.dia.set(f"{hoje:%d/%m/%Y}")
+        _processar(j)
+    assert _principal_livre(j)
+
+
 def _dialogo_configuracoes(j):
     from ferramentas1doc.gui import janela as mod
     abertos = [w for w in j.winfo_children() if isinstance(w, mod.DialogoConfiguracoes)]
