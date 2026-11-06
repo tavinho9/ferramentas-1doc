@@ -98,9 +98,16 @@ class BotaoCalendario(ttk.Button):
 
 class Calendario(tk.Toplevel):
     """O calendário aberto, logo abaixo do campo (ou acima, sem espaço na
-    tela). Fecha ao escolher um dia, com Esc, com clique fora dele, quando o
-    programa perde o foco ou quando a janela principal é movida ou minimizada.
-    Teclado: setas mudam o dia, PageUp/PageDown o mês, Enter escolhe."""
+    tela). Fecha ao escolher um dia, com Esc, com clique fora dele ou quando
+    perde o foco (outro programa, a janela principal minimizada ou arrastada
+    pela barra de título). Preso à principal (transient), como a lista
+    suspensa do Tk: some junto se ela for minimizada.
+    Teclado: setas mudam o dia, PageUp/PageDown o mês, Enter escolhe.
+
+    Nada fica ligado à janela principal, e o que é agendado depois (conferir
+    o foco, prender os cliques) fica no campo, que continua existindo: um
+    after() no próprio calendário, disparado depois de ele fechar, chamaria
+    um comando já apagado e daria erro no Tcl."""
 
     aberto = None       # um por vez
 
@@ -119,8 +126,10 @@ class Calendario(tk.Toplevel):
         self.foco = self.escolhida or (min(self.hoje, maximo) if maximo else self.hoje)
         self.ano, self.mes = self.foco.year, self.foco.month
         self.sob = None                 # dia sob o ponteiro
+        self._fechando = False
         self.withdraw()
         self.overrideredirect(True)
+        self.transient(campo.winfo_toplevel())
         self._montar()
         self._desenhar()
         self._posicionar()
@@ -212,24 +221,18 @@ class Calendario(tk.Toplevel):
         for seq in ("<Return>", "<KP_Enter>"):
             self.bind(seq, lambda _e: self.escolher(self.foco))
         self.bind("<Escape>", lambda _e: self.fechar())
-        self.bind("<FocusOut>", lambda _e: self.after(50, self._conferir_foco))
-        principal = self.campo.winfo_toplevel()
-        if not getattr(principal, "_fecha_calendario", False):
-            principal._fecha_calendario = True
-            principal.bind("<Unmap>", lambda ev: ev.widget is principal and Calendario.fechar_aberto(), add="+")
-            principal.bind("<Configure>", lambda ev: ev.widget is principal and Calendario.fechar_aberto(),
-                           add="+")
+        self.bind("<FocusOut>", lambda _e: self._fechando or self.campo.after(50, self._conferir_foco))
 
     def _prender(self, tentativas=25):
         """Prende os cliques do programa no calendário (como a lista suspensa
         do Tk faz), para o clique fora dele fechá-lo. Só com ele à mostra."""
-        if not self.winfo_exists():
+        if self._fechando or not self.winfo_exists():
             return
         try:
             self.grab_set()
         except tk.TclError:
             if tentativas:
-                self.after(20, lambda: self._prender(tentativas - 1))
+                self.campo.after(20, lambda: self._prender(tentativas - 1))
             return
         self.focus_force()
 
@@ -241,7 +244,7 @@ class Calendario(tk.Toplevel):
         return None
 
     def _conferir_foco(self):
-        if not self.winfo_exists():
+        if self._fechando or not self.winfo_exists():
             return
         try:
             foco = self.focus_get()
@@ -294,8 +297,9 @@ class Calendario(tk.Toplevel):
     def fechar(self):
         if Calendario.aberto is self:
             Calendario.aberto = None
-        if not self.winfo_exists():
+        if self._fechando or not self.winfo_exists():
             return
+        self._fechando = True           # o <FocusOut> da destruição não agenda mais nada
         try:
             self.grab_release()
         except tk.TclError:

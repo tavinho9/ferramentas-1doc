@@ -35,6 +35,7 @@ class Janela(tk.Tk):
         self.executando = None            # thread da tarefa em curso
         self.ultimo_arquivo = None
         self.dialogo_configuracoes = None
+        self._acomodar_pendente = None
         self.title(f"{NOME_APP} — Prefeitura de Montes Claros  (v{VERSAO})")
         self.geometry("1100x920")
         self.minsize(960, 700)
@@ -60,8 +61,9 @@ class Janela(tk.Tk):
         self.update_idletasks()             # tamanhos calculados: cada aba pede o espaço do formulário
         for area in self.areas:
             area.medir()
+        self.update_idletasks()             # o pedido novo das abas chega até o painel
         self._acomodar_abas()
-        self.painel.bind("<Configure>", lambda _e: self.after_idle(self._acomodar_abas))
+        self.painel.bind("<Configure>", lambda _e: self._agendar_acomodar())
         self.protocol("WM_DELETE_WINDOW", self._fechar)
 
         self.terminal = Terminal(self._apagar_linha, self._inserir)
@@ -97,7 +99,7 @@ class Janela(tk.Tk):
             rodape.pack(side="bottom", fill="x", padx=12, pady=10)
             area = AreaRolavel(pagina)
             area.pack(fill="both", expand=True)
-            area.bind("<<RolagemMudou>>", lambda _e: self.after_idle(self._acomodar_abas))
+            area.bind("<<RolagemMudou>>", lambda _e: self._agendar_acomodar())
             aba = cls(area.canvas)
             area.colocar(aba)
             btn = ttk.Button(rodape, text="Executar", style="Executar.TButton",
@@ -108,16 +110,23 @@ class Janela(tk.Tk):
             self.abas.append(aba)
             self.areas.append(area)
 
+    def _agendar_acomodar(self):
+        """Junta numa só acomodação os avisos de uma rajada (redimensionar a
+        janela gera vários) e a faz depois de o Tk propagar os tamanhos pedidos
+        (o painel não move o divisor quando o pedido da aba muda), sem forçar
+        um update dentro do tratamento de um evento."""
+        if self._acomodar_pendente is not None:
+            self.after_cancel(self._acomodar_pendente)
+        self._acomodar_pendente = self.after(30, self._acomodar_abas)
+
     def _acomodar_abas(self):
         """Divide a altura entre as abas e as Mensagens: as abas ficam com o
         que o formulário pede, desde que sobre para as Mensagens uma altura
         mínima; se não sobrar, o formulário rola. (Sem isto, as Mensagens
         sumiam e a aba era cortada embaixo, levando o Executar.)"""
+        self._acomodar_pendente = None
         if not self.painel.winfo_exists() or len(self.painel.panes()) < 2:
             return
-        # o painel não move o divisor quando a aba muda de tamanho pedido, e
-        # o pedido sobe em etapas: espera os tamanhos se propagarem
-        self.update_idletasks()
         minimo_mensagens = self.winfo_pixels("1.2i")
         cabe = self.painel.winfo_height() - minimo_mensagens
         self.painel.sashpos(0, max(0, min(self.notebook.winfo_reqheight(), cabe)))
