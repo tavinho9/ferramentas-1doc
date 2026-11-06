@@ -188,3 +188,28 @@ def test_verificar_cookies_tela_de_login(monkeypatch):
     import fake1doc
     fake1doc.instalar(monkeypatch, logado=False)
     assert sessao.verificar_cookies([], "UA") is None
+
+
+def test_sem_conexao_nao_descarta_a_sessao_salva(dados, cred, monkeypatch):
+    import requests
+
+    def cai(self, *a, **k):
+        raise requests.ConnectionError("rede fora")
+    sessao.salvar(cred)
+    monkeypatch.setattr(requests.Session, "request", cai)
+    monkeypatch.setattr(sessao, "aguardar_login", lambda *a, **k: pytest.fail("abriu o navegador"))
+    with pytest.raises(sessao.LoginCancelado, match="não respondeu"):
+        sessao.obter_sessao(avisar=lambda *_: None)
+    assert sessao.carregar_salva() is not None          # continua guardada
+
+
+def test_sem_conexao_durante_a_espera_continua_esperando(dados, monkeypatch):
+    monkeypatch.setattr(sessao, "esperar", lambda s: sessao.checar_cancelamento())
+    respostas = iter([sessao.SemConexao("x"), ("SETOR", "x@y")])
+
+    def validar(c, u):
+        r = next(respostas)
+        if isinstance(r, Exception):
+            raise r
+        return r
+    assert _aguardar(NavegadorFalso(login_apos=1), validar=validar).setor == "SETOR"

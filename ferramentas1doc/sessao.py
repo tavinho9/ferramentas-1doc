@@ -51,6 +51,11 @@ class LoginCancelado(Exception):
     """O login não aconteceu: janela fechada, tempo esgotado ou navegador indisponível."""
 
 
+class SemConexao(Exception):
+    """O 1Doc não respondeu (rede, proxy, servidor fora). Não quer dizer que a
+    sessão expirou: a sessão salva não é descartada por isso."""
+
+
 CANCELAR = threading.Event()
 
 
@@ -142,8 +147,9 @@ def _sessao_requests(cookies, ua):
 
 def verificar_cookies(cookies, ua, timeout=30):
     """(setor, e-mail) se os cookies valem para requisições; None se o 1Doc
-    devolveu a tela de login. Se o "Inbox pessoal" estiver ativo, troca para o
-    inbox do setor (o mesmo link do menu), porque as caixas seguem o inbox ativo."""
+    devolveu a tela de login; SemConexao se ele não respondeu. Se o "Inbox
+    pessoal" estiver ativo, troca para o inbox do setor (o mesmo link do menu),
+    porque as caixas seguem o inbox ativo."""
     from bs4 import BeautifulSoup
 
     s = _sessao_requests(cookies, ua)
@@ -151,8 +157,8 @@ def verificar_cookies(cookies, ua, timeout=30):
         try:
             r = s.get(URL_LOGIN, timeout=timeout)
             r.raise_for_status()
-        except requests.RequestException:
-            return None
+        except requests.RequestException as e:
+            raise SemConexao(str(e)[:160]) from None
         soup = BeautifulSoup(r.content.decode("utf-8", errors="replace"), PARSER)
         email = soup.select_one("input#sis_usr_email")
         email = (email.get("value") or "").strip() if email is not None else ""
@@ -161,8 +167,8 @@ def verificar_cookies(cookies, ua, timeout=30):
         if soup.select_one("li.li_pessoal.active") and tentativa == 1:
             try:
                 s.get(BASE, params={"pg": "painel/listar", "meu": "0", "trocar": "1"}, timeout=timeout)
-            except requests.RequestException:
-                return None
+            except requests.RequestException as e:
+                raise SemConexao(str(e)[:160]) from None
             continue
         setor = soup.select_one("input#s_s")
         return ((setor.get("value") if setor is not None else "") or "(setor não identificado)", email)
@@ -303,7 +309,10 @@ def aguardar_login(navegador="auto", minutos=10, avisar=print, fabrica=None, val
                 except WebDriverException:
                     continue
                 checar_cancelamento()
-                ok = validar(cookies, ua)
+                try:
+                    ok = validar(cookies, ua)
+                except SemConexao:
+                    ok = None           # tenta de novo na próxima volta
                 if ok:
                     setor, email = ok
                     avisar(f"✓ Login detectado — {email}, setor {setor}")
@@ -333,7 +342,10 @@ def obter_sessao(forcar_login=False, navegador=None, minutos=None, avisar=print,
         salva = carregar_salva()
         if salva is not None:
             checar_cancelamento()
-            ok = verificar_cookies(salva.cookies, salva.ua)
+            try:
+                ok = verificar_cookies(salva.cookies, salva.ua)
+            except SemConexao as e:
+                raise LoginCancelado(f"o 1Doc não respondeu — confira a internet e tente de novo ({e})") from None
             if ok:
                 salva.setor, salva.email = ok
                 avisar(f"✓ Sessão salva reaproveitada — {salva.email}, setor {salva.setor}")
