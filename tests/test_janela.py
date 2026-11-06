@@ -110,6 +110,59 @@ def _dialogo_configuracoes(j):
     return abertos[0]
 
 
+def _principal_desabilitada(j):
+    return os.name == "nt" and bool(int(j.attributes("-disabled")))
+
+
+def test_configuracoes_uma_so_e_a_principal_volta_ao_fechar(janela):
+    j = janela
+    j._configuracoes()
+    _processar(j)
+    d = _dialogo_configuracoes(j)
+    j._configuracoes()                      # clicar de novo traz a mesma, não abre outra
+    _processar(j)
+    assert _dialogo_configuracoes(j) is d
+    assert d.winfo_viewable()
+    assert str(d.transient()) == str(j)     # presa à principal: minimiza e volta junto
+    if os.name == "nt":                     # modal sem grab do Tk (ver Dialogo)
+        assert _principal_desabilitada(j) and j.grab_current() is None
+    else:
+        assert j.grab_current() is d
+
+    d.fechar()                              # Cancelar, Salvar, Esc e o X passam por aqui
+    _processar(j)
+    assert not d.winfo_exists()
+    assert j.grab_current() is None and not _principal_desabilitada(j)
+
+    j._configuracoes()                      # fechada, abre de novo
+    _processar(j)
+    d2 = _dialogo_configuracoes(j)
+    assert d2 is not d
+    d2.destroy()                            # destruída por outro caminho: a principal volta igual
+    _processar(j)
+    assert j.grab_current() is None and not _principal_desabilitada(j)
+
+
+def test_opcoes_da_busca_uma_so_presa_a_principal(janela):
+    aba = janela.abas[1]
+    aba._ajuda()
+    _processar(janela)
+    o = aba.janela_ajuda
+    aba._ajuda()
+    _processar(janela)
+    assert aba.janela_ajuda is o
+    assert [w for w in aba.winfo_children() if isinstance(w, tk.Toplevel)] == [o]
+    assert str(o.transient()) == str(janela)
+    assert janela.grab_current() is None and not _principal_desabilitada(janela)   # não é modal
+    o.destroy()
+    _processar(janela)
+    aba._ajuda()
+    _processar(janela)
+    assert aba.janela_ajuda is not o and aba.janela_ajuda.winfo_exists()
+    aba.janela_ajuda.destroy()
+    _processar(janela)
+
+
 @pytest.mark.skipif(os.name != "nt", reason="minimizar e restaurar como o Windows faz (só no Windows)")
 def test_com_configuracoes_aberta_o_programa_minimiza_e_volta(janela):
     """Com a janela de Configurações aberta, o programa minimizado tem de voltar

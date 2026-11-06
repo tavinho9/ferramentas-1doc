@@ -32,6 +32,7 @@ class Janela(tk.Tk):
         self.eventos = queue.Queue()      # avisos das threads para a janela
         self.executando = None            # thread da tarefa em curso
         self.ultimo_arquivo = None
+        self.dialogo_configuracoes = None
         self.title(f"{NOME_APP} — Prefeitura de Montes Claros  (v{VERSAO})")
         self.geometry("1100x920")
         self.minsize(960, 700)
@@ -293,14 +294,74 @@ class Janela(tk.Tk):
 
     # ---------------------------------------------------------- configurações
     def _configuracoes(self):
-        DialogoConfiguracoes(self)
+        d = self.dialogo_configuracoes
+        if d is not None and d.winfo_exists():
+            d.trazer()
+        else:
+            self.dialogo_configuracoes = DialogoConfiguracoes(self)
 
 
-class DialogoConfiguracoes(tk.Toplevel):
-    def __init__(self, pai):
+class Dialogo(tk.Toplevel):
+    """Janela secundária modal, presa à janela principal.
+
+    `transient`: some e volta junto com a principal quando o programa é
+    minimizado e restaurado, e fica sempre na frente dela.
+
+    No Windows, a principal fica desabilitada enquanto o diálogo está aberto
+    (como o próprio Windows faz com as caixas de diálogo dele), em vez de um
+    grab_set do Tk. Com um grab, o Tk do Windows descarta todos os comandos de
+    sistema da janela principal, inclusive minimizar e restaurar: minimizado
+    pelo Win+D, o programa não voltava mais pela barra de tarefas e ficava
+    inacessível."""
+
+    def __init__(self, pai, titulo):
         super().__init__(pai)
-        self.title("Configurações")
+        self.withdraw()                     # monta escondido; aparece já no lugar (mostrar)
+        self.pai = pai
+        self.title(titulo)
         self.transient(pai)
+        self.protocol("WM_DELETE_WINDOW", self.fechar)
+        self.bind("<Escape>", lambda _e: self.fechar())
+        self.bind("<Destroy>", self._destruido)
+
+    def mostrar(self):
+        """Centraliza sobre a principal, mostra e prende a atenção. Chamar no
+        fim da montagem."""
+        self.update_idletasks()
+        x = self.pai.winfo_rootx() + (self.pai.winfo_width() - self.winfo_reqwidth()) // 2
+        y = self.pai.winfo_rooty() + (self.pai.winfo_height() - self.winfo_reqheight()) // 3
+        self.geometry(f"+{max(x, self.pai.winfo_rootx())}+{max(y, self.pai.winfo_rooty())}")
+        self.trazer()
+        self._prender(True)
+
+    def trazer(self):
+        self.deiconify()
+        self.lift()
+        self.focus_force()
+
+    def _prender(self, sim):
+        try:
+            if os.name == "nt":
+                self.pai.attributes("-disabled", sim)
+            elif sim:
+                self.grab_set()             # fora do Windows o grab não atrapalha minimizar
+        except tk.TclError:
+            pass
+
+    def fechar(self):
+        # Reabilita a principal antes de destruir; na ordem inversa, o Windows
+        # passa o foco para outro programa e a principal vai para trás.
+        self._prender(False)
+        self.destroy()
+
+    def _destruido(self, evento):
+        if evento.widget is self:           # <Destroy> também chega pelos filhos
+            self._prender(False)
+
+
+class DialogoConfiguracoes(Dialogo):
+    def __init__(self, pai):
+        super().__init__(pai, "Configurações")
         self.resizable(False, False)
         self.cfg = config.carregar()
         f = ttk.Frame(self, padding=14)
@@ -337,9 +398,9 @@ class DialogoConfiguracoes(tk.Toplevel):
 
         b = ttk.Frame(f)
         b.grid(row=7, column=0, columnspan=3, sticky="e", pady=(14, 0))
-        ttk.Button(b, text="Cancelar", command=self.destroy).pack(side="right")
+        ttk.Button(b, text="Cancelar", command=self.fechar).pack(side="right")
         ttk.Button(b, text="Salvar", command=self._salvar).pack(side="right", padx=6)
-        self.grab_set()
+        self.mostrar()
 
     def _escolher(self):
         p = filedialog.askdirectory(title="Pasta das planilhas", parent=self,
@@ -361,4 +422,4 @@ class DialogoConfiguracoes(tk.Toplevel):
         cfg = config.carregar()
         cfg.update(navegador=nav, minutos_login=minutos, pasta_saida=pasta, abrir_planilha=self.abrir.get())
         config.salvar(cfg)
-        self.destroy()
+        self.fechar()

@@ -122,6 +122,7 @@ class AbaBusca(ttk.Frame):
                          "valem como OU. Datas: DD/MM/AAAA, hoje, ontem ou -N (N dias atrás). "
                          "Ex.: \"Ainda não chegou a\" = Pesquisa de Mercado.")
         self.v = {}
+        self.janela_ajuda = None
         corpo = ttk.Frame(self)
         corpo.pack(fill="both", expand=True, padx=12)
 
@@ -211,7 +212,16 @@ class AbaBusca(ttk.Frame):
 
     def _ajuda(self):
         from .. import busca
-        janela = tk.Toplevel(self)
+        if self.janela_ajuda is not None and self.janela_ajuda.winfo_exists():
+            self.janela_ajuda.deiconify()
+            self.janela_ajuda.lift()
+            self.janela_ajuda.focus_force()
+            return
+        # Não é modal (dá para escrever em "Outras opções" com ela aberta), mas
+        # fica presa à principal: minimiza e volta junto e não some atrás dela.
+        janela = self.janela_ajuda = tk.Toplevel(self)
+        janela.transient(self.winfo_toplevel())
+        janela.bind("<Escape>", lambda _e: janela.destroy())
         janela.title("Opções da busca")
         janela.geometry("900x620")
         t = tk.Text(janela, wrap="none", font=("Consolas", 9))
