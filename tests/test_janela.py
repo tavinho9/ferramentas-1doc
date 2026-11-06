@@ -219,7 +219,7 @@ def test_com_janela_secundaria_aberta_o_programa_minimiza_e_volta(janela, qual):
 
 
 @pytest.mark.skipif(os.name != "nt", reason="diagnóstico temporário")
-def test_zz_diagnostico_temporario(janela):
+def test_zz_diagnostico_temporario(janela, capsys):
     import ctypes
     from ctypes import wintypes
     from ferramentas1doc.gui.secundaria import JanelaSecundaria
@@ -228,29 +228,30 @@ def test_zz_diagnostico_temporario(janela):
         getattr(u, nome).argtypes = (wintypes.HWND,)
     u.GetWindow.argtypes = (wintypes.HWND, ctypes.c_uint)
     u.GetWindow.restype = wintypes.HWND
-    u.GetAncestor.argtypes = (wintypes.HWND, ctypes.c_uint)
-    u.GetAncestor.restype = wintypes.HWND
     u.SendMessageW.argtypes = (wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
     u.SendMessageW.restype = wintypes.LPARAM
     u.ShowWindow.argtypes = (wintypes.HWND, ctypes.c_int)
+
+    def diz(t):
+        with capsys.disabled():
+            print("DIAG " + t, flush=True)
     j = janela
-    mapas = []
-    j.bind("<Map>", lambda e: mapas.append(str(e.widget)), add="+")
-    j.bind("<Unmap>", lambda e: mapas.append("unmap " + str(e.widget)), add="+")
-    linhas = [f"bind Map: {j.bind('<Map>')!r}"]
+    diz(f"inicio bind Map={j.bind('<Map>')!r} state={j.state()}")
     j._configuracoes()
     _processar(j)
     d = _dialogo_configuracoes(j)
     P = int(j.wm_frame(), 16)
     D = int(d.wm_frame(), 16)
+    diz(f"P={P} D={D}")
 
     def foto(rot):
-        linhas.append(
-            f"{rot}: P iconic={u.IsIconic(P)} vis={u.IsWindowVisible(P)} st={j.state()} | "
-            f"D frame={d.wm_frame()} (inicial {hex(D)}) vis={u.IsWindowVisible(D)} st={d.state()} "
-            f"viewable={d.winfo_viewable()} mapped={d.winfo_ismapped()} owner={u.GetWindow(D, 4)} "
-            f"rootowner={u.GetAncestor(D, 3)} P={P} | eventos={mapas} abertas={len(JanelaSecundaria.abertas)} "
-            f"mostrada={d.mostrada}")
+        try:
+            diz(f"{rot}: P iconic={u.IsIconic(P)} vis={u.IsWindowVisible(P)} st={j.state()} | "
+                f"D frame={d.wm_frame()} vis={u.IsWindowVisible(D)} st={d.state()} "
+                f"viewable={d.winfo_viewable()} mapped={d.winfo_ismapped()} owner={u.GetWindow(D, 4)} "
+                f"abertas={len(JanelaSecundaria.abertas)} mostrada={d.mostrada}")
+        except Exception as e:
+            diz(f"{rot}: erro {e!r}")
     foto("aberto")
     u.ShowWindow(P, 6)
     foto("minimizado (sem processar)")
@@ -262,16 +263,11 @@ def test_zz_diagnostico_temporario(janela):
     foto("restaurado")
     d.deiconify()
     _processar(j)
-    foto("após deiconify")
-    d.withdraw()
-    _processar(j)
-    d.deiconify()
-    _processar(j)
-    foto("após withdraw+deiconify")
+    foto("apos deiconify")
     u.ShowWindow(D, 4)
     _processar(j)
-    foto("após ShowWindow(D)")
+    foto("apos ShowWindow(D)")
     u.ShowWindow(P, 9)
     d.destroy()
     _processar(j)
-    pytest.fail("\n".join(linhas))
+    diz("fim")
