@@ -88,5 +88,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/Ferramentas1Doc-Setup-*.exe \
-            --title "Ferramentas 1Doc ${GITHUB_REF_NAME#v}" --notes-file NOTAS_DA_VERSAO.md
+          # idempotente: se a Release já existe (criada à mão ou por execução anterior), só troca o instalador
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/Ferramentas1Doc-Setup-*.exe --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" dist/Ferramentas1Doc-Setup-*.exe \
+              --title "Ferramentas 1Doc ${GITHUB_REF_NAME#v}" --notes-file NOTAS_DA_VERSAO.md
+          fi
