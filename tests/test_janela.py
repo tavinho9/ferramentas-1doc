@@ -8,6 +8,7 @@ from datetime import date, timedelta
 import pytest
 
 tk = pytest.importorskip("tkinter")
+ttk = pytest.importorskip("tkinter.ttk")
 
 import fake1doc  # noqa: E402
 
@@ -99,7 +100,6 @@ def test_busca_mostra_instrucao_de_datas(janela):
 
 def test_busca_campos_de_etapa_com_lista(janela, dados):
     import json
-    from tkinter import ttk
     from ferramentas1doc import busca_argv
     with open(dados["dados"] / "1doc_cache.json", "w", encoding="utf-8") as f:
         json.dump({"versao": "1.1", "det": {"3|1/2026": {"etapas_quadro": ["Elaboração do ETP", "Etapa Final"]}}},
@@ -178,6 +178,73 @@ def _processar(j, vezes=6):
     for _ in range(vezes):
         j.update()
         time.sleep(0.05)
+
+
+def _rodar_roda(widget, para_baixo=True):
+    widget.event_generate("<MouseWheel>", delta=-120 if para_baixo else 120)
+
+
+def test_area_rolavel_mostra_barras_so_quando_falta_espaco(janela):
+    from ferramentas1doc.gui.rolagem import AreaRolavel
+    t = tk.Toplevel(janela)
+    try:
+        area = AreaRolavel(t)
+        area.pack(fill="both", expand=True)
+        conteudo = tk.Frame(area.canvas, width=600, height=400)
+        lista = ttk.Combobox(conteudo, values=("A", "B", "C"))
+        lista.place(x=10, y=10)
+        lista.set("A")
+        area.colocar(conteudo)
+        avisos = []
+        area.bind("<<RolagemMudou>>", lambda _e: avisos.append(1))
+        t.update_idletasks()
+        area.medir()
+        for geometria, vertical, horizontal in (("300x200", True, True), ("800x250", True, False),
+                                                ("350x600", False, True), ("800x600", False, False)):
+            t.geometry(geometria)
+            _processar(janela, 8)
+            assert (area.rolando(), area.rolando_h()) == (vertical, horizontal), geometria
+        assert avisos                                        # a janela é avisada quando as barras mudam
+        t.geometry("300x200")
+        _processar(janela, 8)
+        _rodar_roda(lista)
+        _processar(janela)
+        assert area.canvas.yview()[0] > 0                    # a roda rola a área...
+        assert lista.get() == "A"                            # ...e não troca o valor da lista
+    finally:
+        t.destroy()
+        _processar(janela)
+
+
+def test_janela_pequena_rola_a_aba_e_mostra_o_executar(janela):
+    """No tamanho mínimo, a aba Busca não cabia: as Mensagens sumiam e a aba
+    era cortada embaixo, levando o Executar."""
+    j = janela
+    j.notebook.select(1)
+    area, aba = j.areas[1], j.abas[1]
+    try:
+        j.geometry("960x700")
+        _processar(j, 12)
+        assert area.rolando()
+        btn = aba.btn_executar
+        assert btn.winfo_ismapped()
+        assert btn.winfo_rooty() + btn.winfo_height() <= j.winfo_rooty() + j.winfo_height()
+        assert j.texto.winfo_ismapped() and j.texto.winfo_height() > 40     # Mensagens continuam lá
+        cb = aba.combos_etapa["etapa"]
+        cb["values"] = ("Pesquisa de Mercado", "Etapa Final")
+        cb.set("Pesquisa de Mercado")
+        _rodar_roda(cb)
+        _processar(j)
+        assert area.canvas.yview()[0] > 0 and cb.get() == "Pesquisa de Mercado"
+        cb.set("")
+    finally:
+        j.geometry("1100x920")
+        _processar(j, 12)
+        j.notebook.select(0)
+        _processar(j)
+    if j.painel.winfo_height() - j.winfo_pixels("1.2i") >= j.notebook.winfo_reqheight():   # coube de novo
+        assert not area.rolando() and area.canvas.yview()[0] == 0
+        assert j.painel.sashpos(0) == j.notebook.winfo_reqheight()
 
 
 def _dialogo_configuracoes(j):

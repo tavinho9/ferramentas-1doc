@@ -218,8 +218,6 @@ class AbaBusca(ttk.Frame):
         cb = ttk.Combobox(pai, textvariable=self.v[chave], width=largura, height=20, style="Etapa.TCombobox")
         cb.configure(postcommand=lambda: self._abrir_etapas(cb))
         cb.bind("<<ComboboxSelected>>", lambda _e: self._escolheu_etapa(cb, chave))
-        for ev in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
-            cb.bind(ev, lambda _e: "break")       # a roda do mouse não troca a etapa sem querer
         cb.grid(row=linha, column=coluna + 1, columnspan=span, sticky="w", pady=2)
         self.combos_etapa[chave] = cb
 

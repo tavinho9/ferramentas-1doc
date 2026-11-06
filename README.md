@@ -50,6 +50,11 @@ do Windows → Aplicativos → Ferramentas 1Doc → Desinstalar.
 4. A planilha sai na pasta configurada (padrão: Área de Trabalho) e abre no
    Excel ao terminar. Isso pode ser desligado em **Configurações**.
 
+Se a janela estiver pequena (ou o Windows usar escala de 125–150%), o
+formulário da aba ganha barra de rolagem, e a roda do mouse rola o formulário.
+O botão **Executar** e as *Mensagens* continuam sempre à vista. O divisor entre
+a aba e as *Mensagens* pode ser arrastado.
+
 Na aba **Busca**, os campos de etapa (*Etapa atual contém*, *Exceto a etapa*,
 *Ainda não chegou a*, *Já chegou a*, *Já passou por*, *…para a etapa*,
 *…saindo da etapa*) têm uma lista para escolher a etapa sem digitar. A lista

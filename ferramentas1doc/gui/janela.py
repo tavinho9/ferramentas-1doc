@@ -12,6 +12,7 @@ from tkinter import filedialog, messagebox, ttk
 from .. import NOME_APP, VERSAO, caminhos, config, sessao
 from .abas import ABAS, FormularioInvalido
 from .log import SaidaFila, Terminal
+from .rolagem import AreaRolavel
 from .secundaria import JanelaSecundaria, abrir_unica
 
 COR_OK, COR_AVISO, COR_ERRO, COR_NEUTRA = "#1b7f3b", "#9a6700", "#b00020", "#555555"
@@ -56,6 +57,11 @@ class Janela(tk.Tk):
         self.painel.pack(fill="both", expand=True, padx=12, pady=6)
         self._montar_abas()
         self._montar_mensagens()
+        self.update_idletasks()             # tamanhos calculados: cada aba pede o espaço do formulário
+        for area in self.areas:
+            area.medir()
+        self._acomodar_abas()
+        self.painel.bind("<Configure>", lambda _e: self.after_idle(self._acomodar_abas))
         self.protocol("WM_DELETE_WINDOW", self._fechar)
 
         self.terminal = Terminal(self._apagar_linha, self._inserir)
@@ -80,19 +86,41 @@ class Janela(tk.Tk):
                                           "O programa continua sozinho assim que você entrar.")
 
     def _montar_abas(self):
+        """Cada aba: o formulário numa área com rolagem e, fora dela, o
+        rodapé com o Executar, que assim nunca fica escondido."""
         self.notebook = ttk.Notebook(self.painel)
         self.painel.add(self.notebook, weight=0)
-        self.abas = []
+        self.abas, self.areas = [], []
         for cls in ABAS:
-            aba = cls(self.notebook)
-            rodape = ttk.Frame(aba)
+            pagina = ttk.Frame(self.notebook)
+            rodape = ttk.Frame(pagina)
             rodape.pack(side="bottom", fill="x", padx=12, pady=10)
+            area = AreaRolavel(pagina)
+            area.pack(fill="both", expand=True)
+            area.bind("<<RolagemMudou>>", lambda _e: self.after_idle(self._acomodar_abas))
+            aba = cls(area.canvas)
+            area.colocar(aba)
             btn = ttk.Button(rodape, text="Executar", style="Executar.TButton",
                              command=lambda a=aba: self._executar(a))
             btn.pack(side="right")
             aba.btn_executar = btn
-            self.notebook.add(aba, text=f"  {cls.titulo}  ")
+            self.notebook.add(pagina, text=f"  {cls.titulo}  ")
             self.abas.append(aba)
+            self.areas.append(area)
+
+    def _acomodar_abas(self):
+        """Divide a altura entre as abas e as Mensagens: as abas ficam com o
+        que o formulário pede, desde que sobre para as Mensagens uma altura
+        mínima; se não sobrar, o formulário rola. (Sem isto, as Mensagens
+        sumiam e a aba era cortada embaixo, levando o Executar.)"""
+        if not self.painel.winfo_exists() or len(self.painel.panes()) < 2:
+            return
+        # o painel não move o divisor quando a aba muda de tamanho pedido, e
+        # o pedido sobe em etapas: espera os tamanhos se propagarem
+        self.update_idletasks()
+        minimo_mensagens = self.winfo_pixels("1.2i")
+        cabe = self.painel.winfo_height() - minimo_mensagens
+        self.painel.sashpos(0, max(0, min(self.notebook.winfo_reqheight(), cabe)))
 
     def _montar_mensagens(self):
         quadro = ttk.LabelFrame(self.painel, text="Mensagens", padding=6)
