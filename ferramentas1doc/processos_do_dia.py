@@ -1,10 +1,13 @@
 """
 SCRIPT: Extrator de processos do dia no 1Doc — varredura por requisição
 =========================================================================
-O dia é pedido no terminal ao iniciar (Enter = hoje).
+O dia vem da interface do programa (aba "Processos do dia") ou, rodando pela
+linha de comando, é pedido no terminal (Enter = hoje).
 
-O navegador só entra para o login. Em seguida os cookies da sessão passam
-para um requests.Session, o Chrome é fechado e todo o resto sai por HTTP:
+O navegador só entra para o login, e quem digita usuário e senha é a pessoa,
+na janela do navegador: o programa espera o login (ferramentas1doc.sessao).
+Em seguida os cookies da sessão passam para um requests.Session, o navegador é
+fechado e todo o resto sai por HTTP:
 
   LISTAGEM  Chama direto o endpoint que a própria interface usa para trocar
             de aba e paginar (link.php?chamada=caixa). O parâmetro
@@ -54,33 +57,25 @@ Coluna Objeto:
                do processo, e o número aparece no resumo.
   DEMAIS       título do processo, como na listagem.
 
-REQUISITOS
-    pip install selenium requests beautifulsoup4 openpyxl
-    pip install lxml            (opcional: parse mais rápido)
-
 COMO USAR
-    1. Senha na variável de ambiente ONEDOC_SENHA — ou deixe sem, e o script
-       pergunta no terminal
-    2. python processos_do_dia_todos_1doc.py
-    3. Informe o dia quando o script perguntar: DD/MM/AAAA, DD/MM/AA, DD/MM
-       (ano corrente), "ontem" — ou só Enter para hoje
-    4. Saída na Área de Trabalho: "processos novos DD.MM.xlsx" (dia e mês do
-       dia escolhido), aberta automaticamente ao final, e processos_do_dia.json
-       (nome fixo; o JSON registra o dia em "dia")
+    No programa: aba "Processos do dia" → Dia (DD/MM/AAAA, DD/MM/AA, DD/MM,
+    "ontem" ou vazio para hoje) → Executar.
+    Linha de comando: python -m ferramentas1doc.processos_do_dia [DIA]
+    Saída na pasta configurada (padrão: Área de Trabalho): "processos novos
+    DD.MM.xlsx" (dia e mês do dia escolhido), aberta ao final, e
+    processos_do_dia.json (nome fixo; o JSON registra o dia em "dia")
 """
 
 import copy
 import json
 import os
 import re
-import subprocess
 import sys
 import threading
 import time
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
-from getpass import getpass
 from importlib.util import find_spec
 from urllib.parse import urljoin
 
@@ -92,6 +87,8 @@ from urllib3.util.retry import Retry
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment
 
+from . import caminhos, config, sessao as sessao_1doc
+
 PARSER = "lxml" if find_spec("lxml") else "html.parser"   # lxml é opcional, só mais rápido
 
 
@@ -99,10 +96,7 @@ PARSER = "lxml" if find_spec("lxml") else "html.parser"   # lxml é opcional, s�
 # CONFIGURAÇÃO
 # ============================================================
 
-URL_1DOC  = "https://montesclaros.1doc.com.br"
-USUARIO   = "joao.chaves@montesclaros.mg.gov.br"
-SENHA     = os.environ.get("ONEDOC_SENHA", "")   # vazio → pergunta no terminal
-HEADLESS  = True     # o navegador agora só abre para o login
+URL_1DOC  = sessao_1doc.URL_1DOC
 TIMEOUT   = 15
 
 # Caixas varridas. Com o filtro de data, cada uma custa ~1 requisição num dia
@@ -135,10 +129,9 @@ OBJETO_DA_ABERTURA  = True
 ID_DESCRICAO_OBJETO = "campo_adicional_descricao_objeto"
 LIMITE_CELULA       = 32000   # Excel aceita até 32.767 caracteres por célula
 
-DESKTOP       = os.path.join(os.path.expanduser("~"), "Desktop")
 NOME_PLANILHA = "processos novos {dia:%d.%m}.xlsx"   # → "processos novos 29.10.xlsx"
-ABRIR_PLANILHA = True                               # abre a planilha ao terminar
-CAMINHO_JSON  = os.path.join(DESKTOP, "processos_do_dia.json")   # None = não grava
+NOME_JSON     = "processos_do_dia.json"             # None = não grava
+# Pasta de saída e "abrir a planilha ao terminar" vêm das Configurações do programa
 
 URL_LINK  = f"{URL_1DOC}/link.php"
 URL_CAIXA = (f"{URL_1DOC}/?pg=painel/listar&meu={0 if CAIXA_DO_SETOR else 1}"
@@ -287,60 +280,17 @@ def _data_br(txt):
 
 
 # ============================================================
-# LOGIN (único uso do navegador)
+# SESSÃO HTTP (o login é feito pela pessoa no navegador: ver sessao.py)
 # ============================================================
 
-def iniciar_driver():
-    from selenium import webdriver
-    options = webdriver.ChromeOptions()
-    if HEADLESS:
-        options.add_argument("--headless=new")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--window-size=1920,1080")
-    driver = webdriver.Chrome(options=options)
-    # Alternativa com webdriver-manager:
-    # from webdriver_manager.chrome import ChromeDriverManager
-    # from selenium.webdriver.chrome.service import Service
-    # driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
-    driver.implicitly_wait(5)
-    return driver
-
-
-def fazer_login(driver, senha):
-    """Faz login no 1Doc e espera a listagem aparecer (prova de que entrou)."""
-    from selenium.webdriver.common.by import By
-    from selenium.webdriver.support.ui import WebDriverWait
-    from selenium.webdriver.support import expected_conditions as EC
-
-    driver.get(URL_1DOC)
-    wait = WebDriverWait(driver, TIMEOUT)
-
-    campo_usuario = wait.until(EC.presence_of_element_located(
-        (By.CSS_SELECTOR, "input[name='identifier'], input[name='login'], #login")))
-    campo_usuario.clear()
-    campo_usuario.send_keys(USUARIO)
-
-    campo_senha = driver.find_element(
-        By.CSS_SELECTOR, "input[name='senha'], input[type='password'], #senha")
-    campo_senha.clear()
-    campo_senha.send_keys(senha)
-
-    driver.find_element(
-        By.CSS_SELECTOR, "button[type='submit'], input[type='submit'], .btn-login").click()
-
-    wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, ".tab-content")))
-    print(f"✓ Login realizado em {URL_1DOC}")
-
-
-def sessao_http_do_driver(driver):
-    """Copia cookies e User-Agent do navegador logado para um requests.Session."""
+def sessao_http(cookies, user_agent):
+    """Cookies e User-Agent do navegador logado → requests.Session."""
     s = requests.Session()
     s.headers.update({
-        "User-Agent": driver.execute_script("return navigator.userAgent;"),
+        "User-Agent": user_agent or "Mozilla/5.0",
         "Accept-Language": "pt-BR,pt;q=0.9",
     })
-    for c in driver.get_cookies():
+    for c in cookies:
         s.cookies.set(c["name"], c["value"], domain=c.get("domain"), path=c.get("path") or "/")
 
     # Repete sozinho em erro transitório (5xx, 429, conexão), com espera crescente
@@ -410,6 +360,7 @@ def _html_da_resposta(r):
 
 
 def baixar(sessao, url, params=None, tipo="outras", xhr=False, referer=None):
+    sessao_1doc.checar_cancelamento()     # botão Cancelar da interface
     cabecalhos = {}
     if xhr:
         cabecalhos["X-Requested-With"] = "XMLHttpRequest"   # como o jQuery da interface
@@ -630,9 +581,9 @@ def _data_emissao(proc):
         return datetime.min
 
 
-def coletar_do_dia(sessao, dia):
+def coletar_do_dia(sessao, dia, caixas=None):
     por_chave, caixas_com_falha = {}, []
-    for caixa, rotulo in CAIXAS:
+    for caixa, rotulo in caixas or CAIXAS:
         try:
             achados, lidas, total = listar_caixa(sessao, caixa, rotulo, dia)
         except SessaoExpirada:
@@ -938,7 +889,7 @@ def exportar_xlsx(processos, arquivo):
     return salvo
 
 
-def exportar_json(resultados, dia, arquivo=CAMINHO_JSON):
+def exportar_json(resultados, dia, arquivo, caixas=None):
     """Coleta completa (inclusive os excluídos, com o motivo). As chaves de
     'itens' seguem as da listagem da skill do 1Doc (numero, data, hora,
     assunto, tipo, prioridade, de, setor_de, caixa). 'assunto' é o mesmo
@@ -962,7 +913,7 @@ def exportar_json(resultados, dia, arquivo=CAMINHO_JSON):
     dados = {
         "dia": dia,
         "gerado_em": datetime.now().isoformat(timespec="seconds"),
-        "caixas": [rotulo for _, rotulo in CAIXAS],
+        "caixas": [rotulo for _, rotulo in caixas or CAIXAS],
         "total": len(itens),
         "numeros": [i["numero"] for i in itens],
         "itens": itens,
@@ -977,7 +928,7 @@ def exportar_json(resultados, dia, arquivo=CAMINHO_JSON):
 
 def _salvar(arquivo, gravar):
     """Grava no caminho pedido; se falhar (ex.: Área de Trabalho no OneDrive),
-    tenta no diretório atual."""
+    tenta na pasta de dados do programa."""
     try:
         pasta = os.path.dirname(os.path.abspath(arquivo))
         if pasta:
@@ -986,64 +937,55 @@ def _salvar(arquivo, gravar):
         print(f"✓ Salvo em: {os.path.abspath(arquivo)}")
         return os.path.abspath(arquivo)
     except Exception as e:
-        fallback = os.path.join(os.getcwd(), os.path.basename(arquivo))
+        fallback = os.path.join(caminhos.pasta_dados(), os.path.basename(arquivo))
         print(f"⚠ Falha ao salvar em '{arquivo}': {e}")
         gravar(fallback)
-        print(f"✓ Salvo no diretório atual: {os.path.abspath(fallback)}")
+        print(f"✓ Salvo na pasta de dados do programa: {os.path.abspath(fallback)}")
         return os.path.abspath(fallback)
 
 
-def abrir_arquivo(caminho):
-    """Abre o arquivo no programa padrão (Excel, no Windows)."""
-    try:
-        if sys.platform.startswith("win"):
-            os.startfile(caminho)
-        elif sys.platform == "darwin":
-            subprocess.Popen(["open", caminho])
-        else:
-            subprocess.Popen(["xdg-open", caminho])
-    except Exception as e:
-        print(f"⚠ Não consegui abrir a planilha automaticamente: {e}")
+abrir_arquivo = caminhos.abrir_arquivo
 
 
 # ============================================================
 # MAIN
 # ============================================================
 
-def main():
-    hoje = date.today()   # fixado uma vez: não muda se cruzar a meia-noite
+def executar(alvo, cred, caixas=None, pasta_saida=None, abrir=None, hoje=None):
+    """Roda a extração para o dia `alvo` (date) com as credenciais da sessão
+    (sessao.obter_sessao). Devolve o caminho da planilha, ou None."""
+    hoje = hoje or date.today()   # fixado uma vez: não muda se cruzar a meia-noite
+    caixas = list(caixas or CAIXAS)
+    cfg = config.carregar()
+    pasta_saida = pasta_saida or config.pasta_saida(cfg)
+    abrir = cfg["abrir_planilha"] if abrir is None else abrir
+    if alvo > hoje:
+        raise SystemExit(f"✗ {alvo:%d/%m/%Y} ainda não chegou.")
+    if not caixas:
+        raise SystemExit("✗ Marque ao menos uma caixa.")
+    dia = alvo.strftime("%d/%m/%Y")
+    exigir_24h = alvo == hoje
+    for k in CONTAGEM:
+        CONTAGEM[k] = 0
 
     print("=" * 60)
     print("EXTRATOR DE PROCESSOS DO DIA — 1Doc (por requisição)")
-    print("=" * 60)
-    alvo = pedir_data(hoje)
-    dia = alvo.strftime("%d/%m/%Y")
-    exigir_24h = alvo == hoje
-
     print("-" * 60)
     print(f"Emitidos em {dia}  |  execução: {datetime.now().strftime('%d/%m/%Y %H:%M')}")
-    print(f"Caixas: {', '.join(r for _, r in CAIXAS)}")
+    print(f"Caixas: {', '.join(r for _, r in caixas)}")
     if not exigir_24h:
         print("Dia passado: processos com quadro entram com a etapa atual,")
         print("qualquer que seja o tempo nela (sem a janela de 24h).")
     print("=" * 60)
 
-    senha = SENHA or getpass(f"Senha do 1Doc para {USUARIO}: ")
-    t0 = time.time()   # depois das perguntas: mede só a execução
-
-    driver = iniciar_driver()
-    try:
-        fazer_login(driver, senha)
-        sessao = sessao_http_do_driver(driver)
-    finally:
-        driver.quit()
-        print("✓ Navegador fechado — daqui em diante, só requisições HTTP")
+    t0 = time.time()
+    sessao = sessao_http(cred.cookies, cred.ua)
 
     try:
         preparar_sessao(sessao)
 
         print(f"\n--- Listagem (filtro de emissão no servidor: {dia}) ---")
-        todos, caixas_com_falha = coletar_do_dia(sessao, dia)
+        todos, caixas_com_falha = coletar_do_dia(sessao, dia, caixas)
         print(f"✓ Processos únicos emitidos em {dia}: {len(todos)}")
 
         resultados = []
@@ -1060,13 +1002,14 @@ def main():
                     print(f"  [{i}/{len(todos)}] [{status}] {r['numero']} | {info[:70]}")
                     resultados.append(r)
     except SessaoExpirada as e:
+        sessao_1doc.esquecer()
         print(f"\n✗ Sessão HTTP recusada: {e}")
-        print("  O login no navegador passou, mas os cookies não valeram fora dele.")
-        print("  Rode de novo; se persistir, o 1Doc mudou o login ou o endpoint.")
-        return
+        print("  A sessão do 1Doc expirou ou caiu. Execute de novo: o navegador vai")
+        print("  abrir para o login. Se persistir, o 1Doc mudou o login ou o endpoint.")
+        return None
     except LayoutDesconhecido as e:
         print(f"\n✗ Interface não reconhecida: {e}")
-        return
+        return None
 
     incluidos = [r for r in resultados if r["incluir"]]
     com_quadro = [r for r in incluidos if not r["sem_quadro"]]
@@ -1077,9 +1020,9 @@ def main():
     abertura_sem_desc = [r for r in abertura if r["objeto_fonte"] != ID_DESCRICAO_OBJETO]
 
     print()
-    caminho_xlsx = exportar_xlsx(incluidos, os.path.join(DESKTOP, NOME_PLANILHA.format(dia=alvo)))
-    if CAMINHO_JSON:
-        exportar_json(resultados, dia, CAMINHO_JSON)
+    caminho_xlsx = exportar_xlsx(incluidos, os.path.join(pasta_saida, NOME_PLANILHA.format(dia=alvo)))
+    if NOME_JSON:
+        exportar_json(resultados, dia, os.path.join(pasta_saida, NOME_JSON), caixas)
 
     print(f"\n{'=' * 60}")
     print("RESUMO")
@@ -1116,8 +1059,25 @@ def main():
     print(f"  Tempo total: {time.time() - t0:.1f}s")
     print(f"{'=' * 60}")
 
-    if ABRIR_PLANILHA and caminho_xlsx:
+    if abrir and caminho_xlsx:
         abrir_arquivo(caminho_xlsx)
+    return caminho_xlsx
+
+
+def main(argv=None):
+    """Linha de comando: python -m ferramentas1doc.processos_do_dia [DIA]"""
+    argv = sys.argv[1:] if argv is None else argv
+    hoje = date.today()
+    if argv:
+        txt = argv[0].strip().lower()
+        alvo = (hoje if txt in ("", "hoje") else hoje - timedelta(days=1) if txt == "ontem"
+                else interpretar_data(txt, hoje))
+        if alvo is None:
+            raise SystemExit(f"✗ Data não reconhecida: {argv[0]!r}")
+    else:
+        alvo = pedir_data(hoje)
+    cred = sessao_1doc.obter_sessao()
+    return executar(alvo, cred, hoje=hoje)
 
 
 if __name__ == "__main__":

@@ -37,8 +37,8 @@ com a origem anotada na Observação.
 
 SAÍDA
 -----
-<planilha>_faltantes_AAAA-MM-DD_HHMM.xlsx na Área de Trabalho (a original
-não é alterada), aberta ao final, com as colunas
+<planilha>_faltantes_AAAA-MM-DD_HHMM.xlsx na pasta de saída (padrão: Área de
+Trabalho; a original não é alterada), aberta ao final, com as colunas
   Nº Processo | Prioridade | Objeto | Etapa | Secretaria |
   Caixa | Último despacho | Trecho do último despacho | Observação
 (as cinco primeiras no formato da planilha, para colar direto nela).
@@ -47,16 +47,17 @@ Se houver processos excluídos só por citarem cancelamento, vão para a aba
 faltantes nem cancelados, nenhum arquivo é gerado. O resumo do terminal mostra
 quantos ficaram de fora por cada motivo.
 
-REQUISITOS
-----------
-    pip install selenium requests beautifulsoup4 lxml openpyxl
-    Chrome instalado (o Selenium 4.6+ baixa o ChromeDriver sozinho)
+LOGIN
+-----
+Feito por você, na janela do navegador; o programa espera e reaproveita a
+sessão (ferramentas1doc.sessao). Usuário e senha nunca passam por aqui.
 
 USO
 ---
-    python verificar_faltantes_1doc.py                 # abre seletor de arquivo
-    python verificar_faltantes_1doc.py planilha.xlsx
-    python verificar_faltantes_1doc.py planilha.xlsx --aba "Planilha1"
+    No programa: aba "Faltantes na planilha".
+    Linha de comando:
+    python -m ferramentas1doc.faltantes                 # abre seletor de arquivo
+    python -m ferramentas1doc.faltantes planilha.xlsx --aba "Planilha1"
 """
 
 import argparse
@@ -70,7 +71,6 @@ import unicodedata
 from concurrent.futures import ThreadPoolExecutor
 from copy import copy
 from datetime import datetime
-from getpass import getpass
 
 import requests
 from bs4 import BeautifulSoup
@@ -81,15 +81,14 @@ from openpyxl.worksheet.table import Table, TableStyleInfo
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
+from . import caminhos, config, sessao as sessao_1doc
+
 
 # ============================================================
 # CONFIGURAÇÃO
 # ============================================================
 
-URL_1DOC    = "https://montesclaros.1doc.com.br"
-USUARIO     = "joao.chaves@montesclaros.mg.gov.br"
-SENHA       = ""          # vazio = pergunta no terminal (recomendado)
-HEADLESS    = True        # True = navegador invisível
+URL_1DOC    = sessao_1doc.URL_1DOC
 TIMEOUT     = 20
 WORKERS     = 4           # detalhes baixados em paralelo
 PAUSA_REQ   = 0.3         # segundos após cada requisição (por thread)
@@ -152,8 +151,8 @@ ID_DOCUMENTO = "3"
 CABECALHOS_NUMERO = ("n processo", "no processo", "numero processo",
                      "numero do processo", "processo", "numero", "n")
 
-ARQ_CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                         "hash_cache_1doc.json")
+# Na pasta de dados do programa (compartilhado com o verificar_planilha)
+ARQ_CACHE = caminhos.arquivo_dados("hash_cache_1doc.json")
 
 URL_PAINEL = f"{URL_1DOC}/?pg=painel/listar&meu=0&trocar=1&caixa=entrada"
 
@@ -272,50 +271,16 @@ def ler_planilha(caminho, aba=None):
 
 
 # ============================================================
-# LOGIN (Selenium) E SESSÃO HTTP
+# SESSÃO HTTP (o login é feito por você no navegador: ver sessao.py)
 # ============================================================
 
-def iniciar_driver():
-    from selenium import webdriver
-    options = webdriver.ChromeOptions()
-    if HEADLESS:
-        options.add_argument("--headless=new")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--window-size=1920,1080")
-    driver = webdriver.Chrome(options=options)
-    driver.implicitly_wait(0)            # esperas sempre explícitas
-    return driver
-
-
-def fazer_login(driver, senha):
-    from selenium.webdriver.common.by import By
-    from selenium.webdriver.support import expected_conditions as EC
-    from selenium.webdriver.support.ui import WebDriverWait
-
-    driver.get(URL_1DOC)
-    wait = WebDriverWait(driver, TIMEOUT)
-    usuario = wait.until(EC.presence_of_element_located(
-        (By.CSS_SELECTOR, "input[name='identifier'], input[name='login'], #login")))
-    usuario.clear()
-    usuario.send_keys(USUARIO)
-    campo_senha = driver.find_element(
-        By.CSS_SELECTOR, "input[name='senha'], input[type='password'], #senha")
-    campo_senha.clear()
-    campo_senha.send_keys(senha)
-    driver.find_element(
-        By.CSS_SELECTOR, "button[type='submit'], input[type='submit'], .btn-login").click()
-    wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, ".tab-content")))
-    print(f"✓ Login realizado em {URL_1DOC}")
-
-
-def sessao_http_do_driver(driver):
+def sessao_http(cookies, user_agent):
     s = requests.Session()
     s.headers.update({
-        "User-Agent": driver.execute_script("return navigator.userAgent;"),
+        "User-Agent": user_agent or "Mozilla/5.0",
         "Accept-Language": "pt-BR,pt;q=0.9",
     })
-    for c in driver.get_cookies():
+    for c in cookies:
         s.cookies.set(c["name"], c["value"], domain=c.get("domain"), path=c.get("path") or "/")
     retry = Retry(total=3, backoff_factor=0.6, status_forcelist=(429, 500, 502, 503, 504),
                   allowed_methods=("GET",))     # POST do Localizar não é repetido
@@ -347,6 +312,7 @@ def _texto(r):
 
 
 def baixar(sessao, url, params=None, xhr=False, referer=None):
+    sessao_1doc.checar_cancelamento()     # botão Cancelar da interface
     cabecalhos = {}
     if xhr:
         cabecalhos["X-Requested-With"] = "XMLHttpRequest"   # como o jQuery da interface
@@ -419,6 +385,7 @@ def _candidatos_resposta(r):
 
 
 def localizar_http(sessao, item):
+    sessao_1doc.checar_cancelamento()
     dados = {"id_documento": ID_DOCUMENTO, "id_assunto": "",
              "num_codigo": item["digitos"], "ano": item["ano"]}
     r = sessao.post(f"{URL_1DOC}/formEmissao.php?formAcessoRapido", data=dados,
@@ -909,8 +876,10 @@ def abrir(ctx, item, link=None):
                 if fonte.endswith("(HTTP)"):
                     hashes = localizar_http(ctx.sessao, item)
                 elif ctx.driver is not None:
+                    # navegador invisível aberto só agora, na 1ª vez que precisar
                     with ctx.lock_driver:
-                        hashes = localizar_selenium(ctx.driver, item)
+                        drv = ctx.driver.obter()
+                        hashes = localizar_selenium(drv, item) if drv is not None else []
                 else:
                     hashes = []
             except requests.RequestException:
@@ -1431,53 +1400,12 @@ def ajustar_layout(ws, lin_cab, ultima_lin, n_cols):
 # PRINCIPAL
 # ============================================================
 
-def area_de_trabalho():
-    """Pasta real da Área de Trabalho. No Windows lê o registro, que já
-    aponta para o OneDrive quando a pasta é redirecionada; no Linux usa o
-    xdg-user-dir. Se nada existir, cai na pasta pessoal."""
-    candidatos = []
-    if os.name == "nt":
-        try:
-            import winreg
-            chave = r"Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders"
-            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, chave) as k:
-                valor, _ = winreg.QueryValueEx(k, "Desktop")
-            candidatos.append(os.path.expandvars(valor))
-        except OSError:
-            pass
-        perfil = os.environ.get("USERPROFILE", os.path.expanduser("~"))
-        for od in (os.environ.get("OneDrive"), os.path.join(perfil, "OneDrive")):
-            if od:
-                candidatos += [os.path.join(od, "Desktop"), os.path.join(od, "Área de Trabalho")]
-    else:
-        try:
-            import subprocess
-            saida = subprocess.run(["xdg-user-dir", "DESKTOP"], capture_output=True,
-                                   text=True, timeout=5).stdout.strip()
-            if saida:
-                candidatos.append(saida)
-        except (OSError, subprocess.SubprocessError):
-            pass
-    casa = os.path.expanduser("~")
-    candidatos += [os.path.join(casa, "Desktop"), os.path.join(casa, "Área de Trabalho")]
-    return next((c for c in candidatos if os.path.isdir(c)), casa)
-
-
-def abrir_arquivo(caminho):
-    """Abre no programa padrão do sistema (Excel, no Windows)."""
-    try:
-        if os.name == "nt":
-            os.startfile(caminho)
-        else:
-            import subprocess
-            import sys
-            subprocess.Popen(["open" if sys.platform == "darwin" else "xdg-open", caminho],
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except OSError as e:
-        print(f"  ⚠ Não consegui abrir a planilha ({e}); abra pelo caminho acima.")
+area_de_trabalho = caminhos.area_de_trabalho
+abrir_arquivo = caminhos.abrir_arquivo
 
 
 def escolher_arquivo():
+    """Só para a linha de comando: no programa, a planilha vem da interface."""
     try:
         import tkinter as tk
         from tkinter import filedialog
@@ -1493,15 +1421,16 @@ def escolher_arquivo():
     return input("Caminho da planilha .xlsx: ").strip().strip('"')
 
 
-def main():
-    ap = argparse.ArgumentParser(description=__doc__.split("\n")[1])
-    ap.add_argument("planilha", nargs="?")
-    ap.add_argument("--aba", help="nome da aba (padrão: a ativa)")
-    args = ap.parse_args()
-
-    caminho = args.planilha or escolher_arquivo()
+def executar(caminho, aba, cred, pasta_saida=None, abrir=None):
+    """Roda a verificação da planilha `caminho` (aba `aba`, None = a ativa)
+    com as credenciais da sessão (sessao.obter_sessao). Devolve o caminho da
+    planilha gerada, ou None se nenhuma foi gerada."""
+    cfg = config.carregar()
+    pasta_saida = pasta_saida or config.pasta_saida(cfg)
+    abrir = cfg["abrir_planilha"] if abrir is None else abrir
     if not caminho or not os.path.isfile(caminho):
         raise SystemExit(f"✗ Arquivo não encontrado: {caminho!r}")
+    args = argparse.Namespace(planilha=caminho, aba=aba or None)
 
     _wb, ws, _lin_cab, col, itens, ignoradas = ler_planilha(caminho, args.aba)
     na_planilha = {it["numero"] for it in itens}
@@ -1513,17 +1442,15 @@ def main():
               + ", ".join(f"linha {r}" for r, _ in ignoradas[:8]))
     print("=" * 64)
 
-    senha = SENHA or getpass(f"Senha do 1Doc para {USUARIO}: ")
     t0 = time.time()
     cache = carregar_cache()
     ano_min = ANO_INICIAL or min((int(it["ano"]) for it in itens), default=datetime.now().year)
 
-    driver = iniciar_driver()
+    driver = sessao_1doc.NavegadorSobDemanda(cred)   # só abre se o Localizar por HTTP falhar
     ctx = None
     linhas, resultados, falhas_caixa = {}, [], []
     try:
-        fazer_login(driver, senha)
-        sessao = sessao_http_do_driver(driver)
+        sessao = sessao_http(cred.cookies, cred.ua)
         baixar(sessao, URL_PAINEL)        # fixa o contexto do setor e testa os cookies
         print("✓ Sessão HTTP válida")
         ctx = Ctx(sessao, cache, driver, ano_min=ano_min)
@@ -1562,12 +1489,13 @@ def main():
                 print(f"  [{i:>4}/{len(futuros)}] {icone} {r['numero']:<12} {r['situacao'][:34]:<34} "
                       f"{(r['etapa'] or '-')[:28]:<28} {r['obs'][:60]}")
     except SessaoExpirada as e:
-        print(f"\n✗ Sessão recusada: {e}. Rode de novo.")
+        sessao_1doc.esquecer()
+        print(f"\n✗ Sessão recusada: {e}. Execute de novo: o navegador vai abrir para o login.")
     finally:
         salvar_cache(cache)
         if ctx is not None:
             ctx.driver = None
-        driver.quit()
+        driver.fechar()
 
     if not resultados:
         raise SystemExit("✗ Nenhum processo verificado; planilha não gerada.")
@@ -1575,7 +1503,7 @@ def main():
     faltantes, absorvidos = deduplicar([r for r in resultados if r["situacao"] == FALTA])
     cancelados = [r for r in resultados if r["situacao"] == CANCELADO]
     nome = os.path.splitext(os.path.basename(caminho))[0]
-    destino = os.path.join(area_de_trabalho(),
+    destino = os.path.join(pasta_saida,
                            f"{nome}_faltantes_{datetime.now():%Y-%m-%d_%H%M}.xlsx")
     gerou = bool(faltantes or cancelados)
     n = exportar_faltantes(faltantes, destino, cancelados) if gerou else 0
@@ -1607,10 +1535,23 @@ def main():
                  if cancelados else ""))
         if not n:
             print("○ Nenhum processo faltando; a planilha traz só os cancelados para conferência.")
-        abrir_arquivo(destino)
+        if abrir:
+            abrir_arquivo(destino)
     else:
         print("○ Nenhum processo faltando; nenhuma planilha exportada.")
     print("=" * 64)
+    return destino if gerou else None
+
+
+def main(argv=None):
+    """Linha de comando: python -m ferramentas1doc.faltantes [planilha.xlsx] [--aba ABA]"""
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[1])
+    ap.add_argument("planilha", nargs="?")
+    ap.add_argument("--aba", help="nome da aba (padrão: a ativa)")
+    args = ap.parse_args(argv)
+    caminho = args.planilha or escolher_arquivo()
+    cred = sessao_1doc.obter_sessao()
+    return executar(caminho, args.aba, cred)
 
 
 if __name__ == "__main__":

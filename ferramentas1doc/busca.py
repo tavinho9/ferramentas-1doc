@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-busca_1doc.py — busca de processos no 1Doc (Prefeitura de Montes Claros) por
+busca.py (antigo busca_1doc.py) — busca de processos no 1Doc (Prefeitura de Montes Claros) por
 etapa, fase, datas e momento de mudança de etapa.
 
 SOMENTE LEITURA. O script só consulta: não despacha, não encaminha, não arquiva,
@@ -12,9 +12,9 @@ para o "Inbox de <setor>" (o mesmo link do menu), porque a caixa segue o inbox a
 
 Como funciona
   1. Sessão — reaproveita os cookies salvos da última execução. Se expiraram,
-     abre o navegador (Selenium) para você fazer o login e captura os cookies.
-     A senha não passa pelo script, salvo se você definir ONEDOC_USUARIO e
-     ONEDOC_SENHA no ambiente (nunca na linha de comando).
+     abre o navegador (Selenium) e espera você fazer o login nele; então
+     captura os cookies. Usuário e senha nunca passam pelo programa
+     (ferramentas1doc.sessao).
   2. Listagem — lê as caixas do seu setor (Em aberto, Saída, Arquivados,
      Favoritos) via link.php?chamada=caixa, ~10 processos por requisição.
   3. Detalhe — abre cada processo que passou nos filtros baratos e lê o quadro
@@ -31,7 +31,8 @@ Como funciona
 Dependências:  pip install selenium requests beautifulsoup4 openpyxl
                (lxml é opcional e acelera a leitura das páginas)
 
-Exemplos: python busca_1doc.py --help
+Exemplos: python -m ferramentas1doc.busca --help
+(no programa, a aba "Busca" monta estes mesmos argumentos)
 """
 from __future__ import annotations
 
@@ -62,6 +63,8 @@ except ImportError as _e:  # pragma: no cover
 import importlib.util
 
 PARSER = "lxml" if importlib.util.find_spec("lxml") else "html.parser"
+
+from . import caminhos, config, sessao as sessao_1doc
 
 VERSAO = "1.1"  # mudou o formato do detalhe: cache de versão anterior é descartado
 BASE_PADRAO = "https://montesclaros.1doc.com.br/"
@@ -232,13 +235,17 @@ def data_cli(s: str, hoje: date, fim: bool = False) -> datetime:
         d = hoje - timedelta(days=1)
     elif re.fullmatch(r"-\d+", t):
         d = hoje - timedelta(days=int(t[1:]))
-    elif re.fullmatch(r"\d{4}-\d{2}-\d{2}", t):
-        d = date.fromisoformat(t)
     else:
-        m = re.fullmatch(r"(\d{1,2})/(\d{1,2})/(\d{4})", t)
-        if not m:
-            raise argparse.ArgumentTypeError(f"data inválida: {s!r} (use DD/MM/AAAA, hoje, ontem ou -N)")
-        d = date(int(m[3]), int(m[2]), int(m[1]))
+        try:
+            if re.fullmatch(r"\d{4}-\d{2}-\d{2}", t):
+                d = date.fromisoformat(t)
+            else:
+                m = re.fullmatch(r"(\d{1,2})/(\d{1,2})/(\d{4})", t)
+                if not m:
+                    raise ValueError
+                d = date(int(m[3]), int(m[2]), int(m[1]))
+        except ValueError:      # formato errado ou dia/mês inexistente (31/02)
+            raise argparse.ArgumentTypeError(f"data inválida: {s!r} (use DD/MM/AAAA, hoje, ontem ou -N)") from None
     return datetime.combine(d, datetime.max.time().replace(microsecond=0) if fim else datetime.min.time())
 
 
@@ -297,56 +304,6 @@ def permanencia(t: str) -> dict | None:
 # =============================================================================
 # Sessão (login no navegador -> cookies -> requests)
 # =============================================================================
-def login_navegador(base: str, navegador: str, perfil: str | None, timeout_s: int):
-    try:
-        from selenium import webdriver
-        from selenium.webdriver.common.by import By
-        from selenium.webdriver.common.keys import Keys
-    except ImportError:
-        sys.exit("Selenium não instalado: pip install selenium")
-
-    if navegador == "edge":
-        opts = webdriver.EdgeOptions()
-        if perfil:
-            opts.add_argument(f"--user-data-dir={perfil}")
-        drv = webdriver.Edge(options=opts)
-    else:
-        opts = webdriver.ChromeOptions()
-        if perfil:
-            opts.add_argument(f"--user-data-dir={perfil}")
-        drv = webdriver.Chrome(options=opts)
-    try:
-        drv.get(base + "?pg=painel/listar")
-        usuario, senha = os.environ.get("ONEDOC_USUARIO"), os.environ.get("ONEDOC_SENHA")
-        if usuario and senha:
-            try:
-                pw = [e for e in drv.find_elements(By.CSS_SELECTOR, "input[type=password]") if e.is_displayed()]
-                if pw:
-                    form = pw[0].find_element(By.XPATH, "./ancestor::form[1]")
-                    campos = [e for e in form.find_elements(
-                        By.CSS_SELECTOR, "input[type=email], input[type=text], input:not([type])") if e.is_displayed()]
-                    if campos:
-                        campos[0].clear(); campos[0].send_keys(usuario)
-                        pw[0].clear(); pw[0].send_keys(senha); pw[0].send_keys(Keys.ENTER)
-            except Exception:
-                print("  Preenchimento automático não funcionou; conclua o login na janela.")
-        print(f"  Faça o login na janela do navegador (aguardando até {timeout_s} s)…")
-        fim = time.time() + timeout_s
-        while time.time() < fim:
-            try:
-                el = drv.find_elements(By.ID, "sis_usr_email")
-                if el and (el[0].get_attribute("value") or "").strip():
-                    break
-            except Exception:
-                pass
-            time.sleep(1.5)
-        else:
-            sys.exit("Tempo esgotado aguardando o login no navegador.")
-        return drv.get_cookies(), drv.execute_script("return navigator.userAgent")
-    finally:
-        drv.quit()
-
-
 class Sessao1Doc:
     """Sessão HTTP autenticada. Uma requests.Session por thread, com repetição automática."""
 
@@ -376,9 +333,11 @@ class Sessao1Doc:
         return r.content.decode("utf-8", errors="replace")
 
     def get(self, caminho: str, params: dict | None = None) -> str:
+        sessao_1doc.checar_cancelamento()     # botão Cancelar da interface
         return self._texto(self._s().get(self.base + caminho, params=params, timeout=self.timeout))
 
     def post(self, caminho: str, dados: dict) -> str:
+        sessao_1doc.checar_cancelamento()
         return self._texto(self._s().post(self.base + caminho, data=dados, timeout=self.timeout))
 
 
@@ -415,31 +374,17 @@ def verificar_sessao(sess: Sessao1Doc, _tentou_inbox: bool = False) -> str | Non
     return (setor.get("value") if setor else "") or "(setor não identificado)"
 
 
-def abrir_sessao(args) -> tuple[Sessao1Doc, str]:
-    arq = Path(args.cookies)
-    if arq.exists() and not args.relogar:
-        try:
-            dados = json.loads(arq.read_text(encoding="utf-8"))
-            if dados.get("base") == args.base:
-                sess = Sessao1Doc(args.base, dados["cookies"], dados.get("ua", ""), args.pausa)
-                setor = verificar_sessao(sess)
-                if setor:
-                    return sess, setor
-                print("Sessão salva expirou.")
-        except (ValueError, KeyError):
-            pass
-    print("Abrindo o navegador para login no 1Doc…")
-    cookies, ua = login_navegador(args.base, args.navegador, args.perfil, args.timeout_login)
-    sess = Sessao1Doc(args.base, cookies, ua, args.pausa)
+def abrir_sessao(args, cred=None) -> tuple[Sessao1Doc, str]:
+    """Sessão salva, se ainda vale; senão o navegador abre e o programa espera o
+    login (ferramentas1doc.sessao). `cred` = credenciais já obtidas pela interface."""
+    if cred is None:
+        minutos = max(1, round(args.timeout_login / 60)) if args.timeout_login else None
+        cred = sessao_1doc.obter_sessao(forcar_login=args.relogar, navegador=args.navegador, minutos=minutos)
+    sess = Sessao1Doc(sessao_1doc.BASE, cred.cookies, cred.ua, args.pausa)
     setor = verificar_sessao(sess)
     if not setor:
-        sys.exit("O login no navegador não resultou em sessão válida para as requisições. Tente --relogar.")
-    arq.write_text(json.dumps({"base": args.base, "ua": ua, "cookies": cookies, "salvo_em": iso(agora_br())},
-                              ensure_ascii=False), encoding="utf-8")
-    try:
-        os.chmod(arq, 0o600)
-    except OSError:
-        pass
+        sessao_1doc.esquecer()
+        sys.exit("O 1Doc recusou a sessão nas requisições. Execute de novo: o navegador vai abrir para o login.")
     return sess, setor
 
 
@@ -1543,39 +1488,43 @@ def executar(a, cli: Cliente1Doc | None, setor: str, agora: datetime) -> dict:
 
 def montar_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="busca_1doc.py", fromfile_prefix_chars="@",
+        prog="busca", fromfile_prefix_chars="@",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description="Busca processos no 1Doc (PMC) por etapa, fase, datas e mudanças de etapa. Somente leitura.",
-        epilog="""Exemplos
+        epilog="""Exemplos (no programa, escreva só as opções no campo "Outras opções")
   Em Pesquisa de Mercado agora (caixa Em aberto):
-    python busca_1doc.py --etapa "Pesquisa de Mercado"
+    --etapa "Pesquisa de Mercado"
   O que mudou de etapa em outubro, em todas as caixas:
-    python busca_1doc.py --caixas todas --mudanca-de 01/10/2026 --mudanca-ate 31/10/2026
+    --caixas todas --mudanca-de 01/10/2026 --mudanca-ate 31/10/2026
   Quem foi para Correção de Documentação nos últimos 7 dias:
-    python busca_1doc.py --mudanca-para "Correção de Documentação" --mudanca-de -7
+    --mudanca-para "Correção de Documentação" --mudanca-de -7
   Entraram na etapa atual hoje:
-    python busca_1doc.py --entrada-de hoje
+    --entrada-de hoje
   Fase de Abertura há 15+ dias na mesma etapa, urgentes primeiro:
-    python busca_1doc.py --fase Abertura --dias-etapa-min 15 --ordenar prioridade,dias_etapa:desc
+    --fase Abertura --dias-etapa-min 15 --ordenar prioridade,dias_etapa:desc
   Regra da CPPFI (antes da Pesquisa de Mercado, ou depois mas com o último despacho citando a CPPFI):
-    python busca_1doc.py --antes-de "Pesquisa de Mercado" --excecao-cita-setor SPOT-DCL-GP-CPPFI --pessoa "João Otávio"
+    --antes-de "Pesquisa de Mercado" --excecao-cita-setor SPOT-DCL-GP-CPPFI --pessoa "João Otávio"
   Processos de uma planilha/lista, sem varrer as caixas:
-    python busca_1doc.py --numeros-arquivo acompanhamento.xlsx
+    --numeros-arquivo acompanhamento.xlsx
   Refiltrar sem acessar o 1Doc (usa o cache da última coleta):
-    python busca_1doc.py --offline --etapa "Validação de Requisição"
-  Parâmetros num arquivo (um por linha):  python busca_1doc.py @consulta_cppfi.txt
+    --offline --etapa "Validação de Requisição"
+  Parâmetros num arquivo (um por linha):  @consulta_cppfi.txt
 
 Datas: DD/MM/AAAA, AAAA-MM-DD, hoje, ontem ou -N (N dias atrás). Limites inclusivos.
 Textos: sem distinção de maiúsculas e acentos; "contém". Valores repetidos de um mesmo filtro = OU;
 filtros diferentes = E.""")
 
-    g = p.add_argument_group("Sessão")
-    g.add_argument("--base", default=BASE_PADRAO, help="endereço do 1Doc (padrão: %(default)s)")
-    g.add_argument("--cookies", default=".1doc_sessao.json", help="arquivo da sessão salva (padrão: %(default)s)")
-    g.add_argument("--relogar", action="store_true", help="ignora a sessão salva e faz novo login")
-    g.add_argument("--navegador", choices=("chrome", "edge"), default="chrome")
-    g.add_argument("--perfil", help="pasta de perfil do navegador (mantém o login entre execuções)")
-    g.add_argument("--timeout-login", type=int, default=300, metavar="S")
+    g = p.add_argument_group("Sessão (o login é sempre feito por você, na janela do navegador)")
+    g.add_argument("--relogar", action="store_true", help="ignora a sessão salva e abre o navegador para novo login")
+    g.add_argument("--navegador", choices=("auto", "chrome", "edge"), default=None,
+                   help="padrão: o das Configurações do programa")
+    g.add_argument("--timeout-login", type=int, default=None, metavar="S",
+                   help="segundos esperando o login (padrão: o das Configurações)")
+    # Aceitos por compatibilidade com consultas antigas (@arquivo), sem efeito:
+    # a sessão fica na pasta de dados do programa e o endereço é fixo.
+    g.add_argument("--base", default=BASE_PADRAO, help=argparse.SUPPRESS)
+    g.add_argument("--cookies", help=argparse.SUPPRESS)
+    g.add_argument("--perfil", help=argparse.SUPPRESS)
 
     g = p.add_argument_group("Universo (o que coletar)")
     g.add_argument("--caixas", default="entrada", help="entrada, saida, arquivo, favoritos (vírgula) ou todas")
@@ -1628,14 +1577,16 @@ filtros diferentes = E.""")
                    help="inclui quem falhou só nos filtros de posição se os últimos N despachos citarem COD")
 
     g = p.add_argument_group("Saída e desempenho")
-    g.add_argument("--saida", metavar="ARQ.xlsx", help="padrão: 'Busca 1Doc DD-MM-AAAA HHhMM.xlsx'")
+    g.add_argument("--saida", metavar="ARQ.xlsx",
+                   help="padrão: 'Busca 1Doc DD-MM-AAAA HHhMM.xlsx' na pasta de saída das Configurações")
+    g.add_argument("--abrir", action="store_true", help="abre a planilha ao terminar")
     g.add_argument("--csv", metavar="ARQ.csv", help="também grava CSV (separador ;)")
     g.add_argument("--sem-xlsx", action="store_true")
     g.add_argument("--ordenar", default="fase,etapa,dias_etapa:desc",
                    help="campos: numero, emissao, prioridade, fase, etapa, entrada, dias_etapa, ult_mov, "
                         "dias_sem_mov (sufixo :desc). Padrão: %(default)s")
     g.add_argument("--mostrar", type=int, default=30, metavar="N", help="linhas no terminal")
-    g.add_argument("--cache", default="1doc_cache.json", help="cache de detalhes (padrão: %(default)s)")
+    g.add_argument("--cache", default=None, help="cache de detalhes (padrão: 1doc_cache.json na pasta de dados)")
     g.add_argument("--sem-cache", action="store_true")
     g.add_argument("--offline", action="store_true", help="não acessa o 1Doc: filtra o cache")
     g.add_argument("--refazer", action="store_true", help="reabre todos os processos, ignorando o cache")
@@ -1674,10 +1625,13 @@ def normalizar_args(a, agora: datetime | None = None):
         setattr(a, nome, [x.strip() for x in (getattr(a, nome) or []) if x and x.strip()])
     if a.offline and a.sem_cache:
         sys.exit("--offline precisa do cache; retire --sem-cache.")
+    if not a.cache:
+        a.cache = caminhos.arquivo_dados("1doc_cache.json")
     return a
 
 
-def main(argv=None):
+def main(argv=None, cred=None):
+    """`cred`: credenciais já obtidas pela interface (sessao.obter_sessao)."""
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     except (AttributeError, ValueError):
@@ -1686,24 +1640,29 @@ def main(argv=None):
     a = normalizar_args(montar_parser().parse_args(argv), agora)
     cli, setor = None, ""
     if not a.offline:
-        sess, setor = abrir_sessao(a)
+        sess, setor = abrir_sessao(a, cred)
         print(f"Sessão ativa — setor: {setor}")
         cli = Cliente1Doc(sess)
     try:
         res = executar(a, cli, setor, agora)
     except SessaoExpirada:
-        sys.exit("A sessão do 1Doc caiu durante a coleta. Rode de novo (o login será pedido); "
-                 "o que já foi detalhado está no cache.")
+        sessao_1doc.esquecer()
+        sys.exit("A sessão do 1Doc caiu durante a coleta. Execute de novo (o navegador vai abrir para o "
+                 "login); o que já foi detalhado está no cache.")
     imprimir_resumo(res["regs"], a.mostrar)
     if res["falhas"]:
         print(f"\nFalhas ({len(res['falhas'])}) — ficam como lacuna, sem chute: "
               + ", ".join(f"{f['numero']} ({f['motivo']})" for f in res["falhas"][:15]))
     mostrar_cita = bool(a.cita_setor or a.excecao_cita_setor or a.pessoa)
     marcar = bool(a.mudanca_de or a.mudanca_ate or a.mudanca_para or a.mudanca_origem)
+    res["arquivo"] = None
     if not a.sem_xlsx:
-        saida = a.saida or f"Busca 1Doc {agora:%d-%m-%Y %Hh%M}.xlsx"
+        saida = a.saida or os.path.join(config.pasta_saida(), f"Busca 1Doc {agora:%d-%m-%Y %Hh%M}.xlsx")
         escrever_xlsx(saida, res["regs"], res["params"], res["falhas"], mostrar_cita, marcar)
-        print(f"\nPlanilha: {saida}")
+        res["arquivo"] = os.path.abspath(saida)
+        print(f"\nPlanilha: {res['arquivo']}")
+        if a.abrir:
+            caminhos.abrir_arquivo(res["arquivo"])
     if a.csv:
         escrever_csv(a.csv, res["regs"], mostrar_cita)
         print(f"CSV: {a.csv}")

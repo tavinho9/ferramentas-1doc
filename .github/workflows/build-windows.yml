@@ -1,0 +1,92 @@
+name: Instalador Windows
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Dependências
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-build.txt
+
+      - name: Testes (inclui login com Chrome real e a janela)
+        env:
+          AUTOTESTE_NAVEGADOR_REAL: "1"
+        run: python -m pytest -q tests
+
+      - name: Versão
+        id: versao
+        shell: bash
+        run: echo "versao=$(python -c 'import ferramentas1doc; print(ferramentas1doc.VERSAO)')" >> "$GITHUB_OUTPUT"
+
+      - name: Empacotar (PyInstaller)
+        run: pyinstaller --noconfirm --clean build/Ferramentas1Doc.spec --distpath dist --workpath build/tmp
+
+      - name: Autoteste do executável
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath "dist\Ferramentas1Doc\Ferramentas1Doc.exe" `
+               -ArgumentList '--autoteste','--relatorio','autoteste-pacote.txt' -Wait -PassThru
+          Get-Content autoteste-pacote.txt
+          if ($p.ExitCode -ne 0) { exit 1 }
+
+      - name: Compilar o instalador (Inno Setup)
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup -y --no-progress
+          }
+          & $iscc "/DMyAppVersion=${{ steps.versao.outputs.versao }}" build\installer.iss
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Instalar, testar o instalado e desinstalar
+        shell: pwsh
+        run: |
+          $setup = Get-ChildItem dist\Ferramentas1Doc-Setup-*.exe | Select-Object -First 1
+          $p = Start-Process $setup.FullName -Wait -PassThru `
+               -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/CURRENTUSER','/NORESTART','/LOG=instalacao.log'
+          $pasta = "$env:LOCALAPPDATA\Programs\Ferramentas 1Doc"
+          $exe = "$pasta\Ferramentas1Doc.exe"
+          if ($p.ExitCode -ne 0 -or -not (Test-Path $exe)) { Get-Content instalacao.log; exit 1 }
+          $atalho = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Ferramentas 1Doc.lnk"
+          if (-not (Test-Path $atalho)) { Write-Error "atalho do menu Iniciar não criado"; exit 1 }
+          $p = Start-Process $exe -ArgumentList '--autoteste','--relatorio','autoteste-instalado.txt' -Wait -PassThru
+          Get-Content autoteste-instalado.txt
+          if ($p.ExitCode -ne 0) { exit 1 }
+          Start-Process "$pasta\unins000.exe" -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait
+          for ($i = 0; $i -lt 30 -and (Test-Path $exe); $i++) { Start-Sleep 1 }
+          if (Test-Path $exe) { Write-Error "a desinstalação deixou o executável"; exit 1 }
+          Write-Host "Instalação, autoteste e desinstalação OK"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Ferramentas1Doc-Setup-${{ steps.versao.outputs.versao }}
+          path: dist/Ferramentas1Doc-Setup-*.exe
+          if-no-files-found: error
+
+      - name: Publicar a versão (tag v*)
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/Ferramentas1Doc-Setup-*.exe \
+            --title "Ferramentas 1Doc ${GITHUB_REF_NAME#v}" --notes-file NOTAS_DA_VERSAO.md

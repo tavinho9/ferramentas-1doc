@@ -1,0 +1,133 @@
+"""As quatro ferramentas de ponta a ponta contra o 1Doc de mentira (fake1doc).
+
+Confere a ligação nova (sessão por cookies, executar(), pasta de saída,
+cache na pasta de dados) e que as regras de antes continuam dando o mesmo
+resultado nos dois processos de exemplo.
+"""
+
+import json
+import os
+from datetime import date, timedelta
+
+import pytest
+from openpyxl import Workbook, load_workbook
+
+import fake1doc
+
+
+def _planilha(caminho, numeros):
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Acompanhamento"
+    ws.append(["Nº Processo", "Prioridade", "Objeto", "Etapa", "Secretaria"])
+    for n in numeros:
+        ws.append([n, "Alta", "objeto", "etapa", "Secretaria de Saúde"])
+    wb.save(caminho)
+    return str(caminho)
+
+
+def _valores(caminho, aba=None):
+    wb = load_workbook(caminho)
+    ws = wb[aba] if aba else wb.active
+    return [[c.value for c in linha] for linha in ws.iter_rows()]
+
+
+def test_processos_do_dia(dados, cred, monkeypatch):
+    from ferramentas1doc import processos_do_dia
+    monkeypatch.setattr(processos_do_dia, "PAUSA_REQ", 0)
+    fake = fake1doc.instalar(monkeypatch)
+    caminho = processos_do_dia.executar(date.today(), cred)
+    assert caminho == os.path.join(str(dados["saida"]), f"processos novos {date.today():%d.%m}.xlsx")
+    linhas = _valores(caminho)
+    assert linhas[0] == ["Nº Processo", "Prioridade", "Objeto", "Etapa", "Secretaria"]
+    # hoje: só entra quem está na etapa atual há menos de 24h (P1, "Esta aqui 2 horas")
+    assert [l[0] for l in linhas[1:]] == ["31.632/2026"]
+    assert linhas[1][2] == "Aquisição de medicamentos para a rede municipal de saúde"   # campo da abertura
+    assert linhas[1][3] == "Pesquisa de Mercado — Abertura"
+    assert linhas[1][4] == "Secretaria de Saúde"
+    js = json.load(open(os.path.join(str(dados["saida"]), "processos_do_dia.json"), encoding="utf-8"))
+    assert js["total"] == 2 and js["dia"] == f"{date.today():%d/%m/%Y}"
+    p2 = [i for i in js["itens"] if i["numero"] == "31.700/2026"][0]
+    assert p2["incluir"] is False and p2["motivo"] == "etapa atual há 1 dia ou mais"
+    assert ("GET", "caixa") in fake.pedidos
+
+
+def test_processos_do_dia_rejeita_futuro(dados, cred):
+    from ferramentas1doc import processos_do_dia
+    with pytest.raises(SystemExit, match="ainda não chegou"):
+        processos_do_dia.executar(date.today() + timedelta(days=1), cred)
+
+
+def test_processos_do_dia_sessao_caida_apaga_a_salva(dados, cred, monkeypatch):
+    from ferramentas1doc import processos_do_dia, sessao
+    sessao.salvar(cred)
+    fake1doc.instalar(monkeypatch, logado=False)
+    assert processos_do_dia.executar(date.today(), cred) is None
+    assert sessao.carregar_salva() is None
+
+
+def test_cancelar_interrompe(dados, cred, monkeypatch):
+    from ferramentas1doc import processos_do_dia, sessao
+    fake1doc.instalar(monkeypatch)
+    sessao.CANCELAR.set()
+    with pytest.raises(sessao.Cancelado):
+        processos_do_dia.executar(date.today(), cred)
+
+
+def test_busca(dados, cred, monkeypatch):
+    from ferramentas1doc import busca, busca_argv
+    fake1doc.instalar(monkeypatch)
+    argv = busca_argv.montar_argv({"caixas": ["entrada"], "etapa": "Pesquisa de Mercado", "csv": True},
+                                  pasta_saida=str(dados["saida"]))
+    argv += ["--pausa", "0"]
+    res = busca.main(argv, cred=cred)
+    assert [r["numero"] for r in res["regs"]] == ["31.632/2026"]
+    assert os.path.dirname(res["arquivo"]) == str(dados["saida"])
+    assert [l[0] for l in _valores(res["arquivo"], "Resultado")] == ["Nº Processo", "31.632/2026"]
+    assert any(f.endswith(".csv") for f in os.listdir(str(dados["saida"])))
+    assert os.path.isfile(os.path.join(str(dados["dados"]), "1doc_cache.json"))     # cache na pasta de dados
+
+    # a mesma consulta sem acessar o 1Doc, só com o cache
+    fake1doc.instalar(monkeypatch, logado=False)
+    res2 = busca.main(["--offline", "--antes-de", "Pesquisa de Mercado", "--sem-xlsx"])
+    assert [r["numero"] for r in res2["regs"]] == ["31.700/2026"]
+
+
+def test_faltantes(dados, cred, monkeypatch):
+    from ferramentas1doc import faltantes
+    monkeypatch.setattr(faltantes, "PAUSA_REQ", 0)
+    monkeypatch.setattr(faltantes, "ARQ_CACHE", os.path.join(str(dados["dados"]), "hash_cache_1doc.json"))
+    fake1doc.instalar(monkeypatch)
+    planilha = _planilha(dados["dados"] / "acomp.xlsx", ["31.632/2026"])
+    destino = faltantes.executar(planilha, None, cred)
+    assert destino and os.path.dirname(destino) == str(dados["saida"])
+    linhas = _valores(destino, "Faltantes")
+    # P2 está antes da Pesquisa de Mercado e fora da planilha; P1 está na planilha
+    assert [l[0] for l in linhas[1:]] == ["31.700/2026"]
+    assert linhas[1][2] == "Reforma da Escola Municipal Exemplo"
+    assert os.path.isfile(faltantes.ARQ_CACHE)
+
+
+def test_verificar_planilha(dados, cred, monkeypatch):
+    from ferramentas1doc import verificar_planilha
+    monkeypatch.setattr(verificar_planilha, "PAUSA_REQ", 0)
+    monkeypatch.setattr(verificar_planilha, "ARQ_CACHE",
+                        os.path.join(str(dados["dados"]), "hash_cache_1doc.json"))
+    fake1doc.instalar(monkeypatch)
+    planilha = _planilha(dados["dados"] / "acomp.xlsx", ["31.632/2026", "31.700/2026"])
+    destino = verificar_planilha.executar(planilha, "Acompanhamento", cred)
+    linhas = _valores(destino)
+    # só P1 chegou à Pesquisa de Mercado; colunas novas no fim
+    assert [l[0] for l in linhas[1:]] == ["31.632/2026"]
+    assert linhas[0][5:] == ["Etapa atual (1Doc)", "Processo pai", "Processo filho", "Objeto (abertura)",
+                             "Observação"]
+    assert linhas[1][5] == "Pesquisa de Mercado"
+    assert linhas[1][8] == "Aquisição de medicamentos para a rede municipal de saúde"
+    cache = json.load(open(verificar_planilha.ARQ_CACHE, encoding="utf-8"))
+    assert cache["31.632/2026"] == "AAAA1111BBBB2222CCCC"       # localizado por HTTP e guardado
+
+
+def test_planilha_inexistente(dados, cred):
+    from ferramentas1doc import faltantes
+    with pytest.raises(SystemExit, match="não encontrado"):
+        faltantes.executar(os.path.join(str(dados["dados"]), "nao_existe.xlsx"), None, cred)
