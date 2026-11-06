@@ -12,7 +12,7 @@ from tkinter import filedialog, messagebox, ttk
 from .. import NOME_APP, VERSAO, caminhos, config, sessao
 from .abas import ABAS, FormularioInvalido
 from .log import SaidaFila, Terminal
-from .secundaria import JanelaSecundaria, abrir_unica, acompanhar
+from .secundaria import JanelaSecundaria, abrir_unica
 
 COR_OK, COR_AVISO, COR_ERRO, COR_NEUTRA = "#1b7f3b", "#9a6700", "#b00020", "#555555"
 
@@ -57,7 +57,6 @@ class Janela(tk.Tk):
         self._montar_abas()
         self._montar_mensagens()
         self.protocol("WM_DELETE_WINDOW", self._fechar)
-        acompanhar(self)                    # Configurações e Opções da busca voltam com a principal
 
         self.terminal = Terminal(self._apagar_linha, self._inserir)
         self.after(100, self._consumir)

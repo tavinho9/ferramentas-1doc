@@ -127,11 +127,6 @@ def test_configuracoes_uma_so_presa_a_principal(janela):
     assert d.winfo_viewable()
     assert str(d.transient()) == str(j)     # presa à principal: minimiza e volta junto
     assert _principal_livre(j)
-    d.withdraw()                            # o Windows a esconde com a principal minimizada…
-    _processar(j)
-    j.event_generate("<Map>")               # …e, quando a principal volta, ela volta junto
-    _processar(j)
-    assert d.winfo_viewable()
     d.destroy()                             # Cancelar, Salvar, Esc e o X
     _processar(j)
     j._configuracoes()                      # fechada, abre de novo
@@ -177,8 +172,10 @@ def test_com_janela_secundaria_aberta_o_programa_minimiza_e_volta(janela, qual):
     user32.SendMessageW.restype = wintypes.LPARAM
     user32.ShowWindow.argtypes = (wintypes.HWND, ctypes.c_int)
     user32.IsIconic.argtypes = user32.IsWindowVisible.argtypes = (wintypes.HWND,)
+    user32.GetWindow.argtypes = (wintypes.HWND, wintypes.UINT)
+    user32.GetWindow.restype = wintypes.HWND
     WM_SYSCOMMAND, SC_MINIMIZE, SC_RESTORE = 0x0112, 0xF020, 0xF120
-    SW_MINIMIZE, SW_RESTORE = 6, 9
+    SW_MINIMIZE, SW_RESTORE, GW_OWNER = 6, 9, 4
 
     j = janela
     principal = int(j.wm_frame(), 16)
@@ -190,84 +187,40 @@ def test_com_janela_secundaria_aberta_o_programa_minimiza_e_volta(janela, qual):
         j.abas[1]._ajuda()
         _processar(j)
         d = j.abas[1].janela_ajuda
-    dialogo = int(d.wm_frame(), 16)
+
+    def moldura():
+        # o Tk recria a moldura (wrapper) da secundária quando a principal volta
+        return int(d.wm_frame(), 16)
+
+    def visivel_na_frente_da_principal():
+        return (d.winfo_viewable() and user32.IsWindowVisible(moldura())
+                and user32.GetWindow(moldura(), GW_OWNER) == principal)
+
     try:
+        assert visivel_na_frente_da_principal()
         # "Mostrar área de trabalho" (Win+D): minimiza sem passar por WM_SYSCOMMAND
         user32.ShowWindow(principal, SW_MINIMIZE)
         _processar(j)
         assert user32.IsIconic(principal)
-        assert not user32.IsWindowVisible(dialogo)          # some junto com a principal
+        assert not user32.IsWindowVisible(moldura())        # some junto com a principal
         # clique no botão do programa na barra de tarefas
         user32.SendMessageW(principal, WM_SYSCOMMAND, SC_RESTORE, 0)
         _processar(j)
         assert not user32.IsIconic(principal), "o programa ficou preso minimizado"
         assert j.state() == "normal"
-        assert user32.IsWindowVisible(dialogo) and d.winfo_viewable()
+        assert visivel_na_frente_da_principal(), "a janela secundária não voltou"
 
         # minimizar pela barra de tarefas e restaurar de novo
         user32.SendMessageW(principal, WM_SYSCOMMAND, SC_MINIMIZE, 0)
         _processar(j)
         assert user32.IsIconic(principal), "o comando de minimizar foi ignorado"
+        assert not user32.IsWindowVisible(moldura())
         user32.SendMessageW(principal, WM_SYSCOMMAND, SC_RESTORE, 0)
         _processar(j)
         assert not user32.IsIconic(principal), "o programa ficou preso minimizado"
-        assert user32.IsWindowVisible(dialogo) and d.winfo_viewable()
+        assert visivel_na_frente_da_principal(), "a janela secundária não voltou"
     finally:
         user32.ShowWindow(principal, SW_RESTORE)
         d.destroy()
         _processar(j)
 
-
-@pytest.mark.skipif(os.name != "nt", reason="diagnóstico temporário")
-def test_zz_diagnostico_temporario(janela, capsys):
-    import ctypes
-    from ctypes import wintypes
-    from ferramentas1doc.gui.secundaria import JanelaSecundaria
-    u = ctypes.WinDLL("user32")
-    for nome in ("IsIconic", "IsWindowVisible", "IsWindowEnabled"):
-        getattr(u, nome).argtypes = (wintypes.HWND,)
-    u.GetWindow.argtypes = (wintypes.HWND, ctypes.c_uint)
-    u.GetWindow.restype = wintypes.HWND
-    u.SendMessageW.argtypes = (wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
-    u.SendMessageW.restype = wintypes.LPARAM
-    u.ShowWindow.argtypes = (wintypes.HWND, ctypes.c_int)
-
-    def diz(t):
-        with capsys.disabled():
-            print("DIAG " + t, flush=True)
-    j = janela
-    diz(f"inicio bind Map={j.bind('<Map>')!r} state={j.state()}")
-    j._configuracoes()
-    _processar(j)
-    d = _dialogo_configuracoes(j)
-    P = int(j.wm_frame(), 16)
-    D = int(d.wm_frame(), 16)
-    diz(f"P={P} D={D}")
-
-    def foto(rot):
-        try:
-            diz(f"{rot}: P iconic={u.IsIconic(P)} vis={u.IsWindowVisible(P)} st={j.state()} | "
-                f"D frame={d.wm_frame()} vis={u.IsWindowVisible(D)} st={d.state()} "
-                f"viewable={d.winfo_viewable()} mapped={d.winfo_ismapped()} owner={u.GetWindow(D, 4)} "
-                f"abertas={len(JanelaSecundaria.abertas)} mostrada={d.mostrada}")
-        except Exception as e:
-            diz(f"{rot}: erro {e!r}")
-    foto("aberto")
-    u.ShowWindow(P, 6)
-    foto("minimizado (sem processar)")
-    _processar(j)
-    foto("minimizado")
-    u.SendMessageW(P, 0x0112, 0xF120, 0)
-    foto("restaurado (sem processar)")
-    _processar(j)
-    foto("restaurado")
-    d.deiconify()
-    _processar(j)
-    foto("apos deiconify")
-    u.ShowWindow(D, 4)
-    _processar(j)
-    foto("apos ShowWindow(D)")
-    u.ShowWindow(P, 9)
-    d.destroy()
-    _processar(j)
-    diz("fim")
