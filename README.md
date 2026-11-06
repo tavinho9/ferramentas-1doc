@@ -137,9 +137,18 @@ python -m pytest -q tests
 compila a cada push na `main`. Ele roda os testes no Windows, inclusive o login
 com Chrome real e a janela. Depois empacota, faz o autoteste do `.exe`, gera o
 instalador, instala, testa o programa instalado e desinstala. O Setup.exe fica
-como artefato da execução. Para publicar uma versão, mude `VERSAO` em
-`ferramentas1doc/__init__.py`, descreva a versão em `NOTAS_DA_VERSAO.md` e crie a
-tag `vX.Y.Z`. A execução da tag cria a Release com o instalador.
+como artefato da execução.
+
+Para publicar uma versão:
+
+1. Mude `VERSAO` em `ferramentas1doc/__init__.py` e descreva a versão em
+   `NOTAS_DA_VERSAO.md`.
+2. No GitHub, abra **Releases → Draft a new release** e crie a tag `vX.Y.Z`
+   (a mesma versão) a partir da `main`.
+3. Publique. Em poucos minutos o workflow compila, testa e anexa
+   `Ferramentas1Doc-Setup-X.Y.Z.exe` à Release.
+
+Enviar a tag pelo git também funciona: a execução da tag cria a Release.
 
 Num PC Windows com Python, `build.bat` faz o mesmo localmente e gera
 `dist\Ferramentas1Doc-Setup-<versão>.exe`.
