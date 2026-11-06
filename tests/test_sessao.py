@@ -3,77 +3,58 @@
 import threading
 
 import pytest
-from selenium.common.exceptions import NoSuchWindowException
 
-from ferramentas1doc import sessao
+from ferramentas1doc import navegador, sessao
 
 HOST = "https://montesclaros.1doc.com.br/"
 
 
-class Elemento:
-    def __init__(self, valor="", registro=None):
-        self.valor = valor
-        self.registro = registro
-
-    def get_attribute(self, nome):
-        return self.valor if nome == "value" else None
-
-    def send_keys(self, *a):            # se o programa digitar algo, o teste acusa
-        self.registro.append(("send_keys", a))
-
-    def click(self):
-        self.registro.append(("click",))
-
-    def clear(self):
-        self.registro.append(("clear",))
-
-
 class NavegadorFalso:
     """Simula a pessoa: fica na tela de login por `login_apos` verificações e
-    então "entra"; ou fecha a janela depois de `fechar_apos`."""
+    então "entra"; ou fecha a janela depois de `fechar_apos` consultas às abas.
+    Guarda todo script executado nas páginas, para o teste conferir que o
+    programa só lê."""
 
     def __init__(self, login_apos=3, fechar_apos=None, url_forcada=None):
         self.login_apos, self.fechar_apos = login_apos, fechar_apos
         self.verificacoes = self.acessos = 0
-        self.urls, self.acoes = [], []
+        self.urls, self.scripts = [], []
         self.fechado = self.encerrado = False
         self.url_forcada = url_forcada
 
-    def get(self, url):
+    def ir(self, url, alvo=None):
         self.urls.append(url)
 
     @property
     def logado(self):
         return self.login_apos is not None and self.verificacoes >= self.login_apos
 
-    @property
-    def current_url(self):
+    def paginas(self):
         self.acessos += 1
         if self.fechar_apos is not None and self.acessos >= self.fechar_apos:
             self.fechado = True
         if self.fechado:
-            raise NoSuchWindowException("fechada")
-        return self.url_forcada or (HOST + "?pg=painel/listar" if self.logado else HOST + "login")
+            raise navegador.ErroNavegador("conexão com o navegador perdida")
+        return [{"id": "aba1",
+                 "url": self.url_forcada or (HOST + "?pg=painel/listar" if self.logado else HOST + "login")}]
 
-    @property
-    def window_handles(self):
-        return [] if self.fechado else ["w1"]
+    def viva(self):
+        try:
+            return bool(self.paginas())
+        except navegador.ErroNavegador:
+            return False
 
-    def find_elements(self, por, valor):
-        if valor == "sis_usr_email":
-            self.verificacoes += 1
-            return [Elemento("teste@pmc", self.acoes)] if self.logado else []
-        if valor == "input[type=password]":
-            return [] if self.logado else [Elemento("", self.acoes)]
-        return []
+    def avaliar(self, alvo, js):
+        self.scripts.append(js)
+        self.verificacoes += 1
+        if self.logado:
+            return {"email": "teste@pmc", "abas": True, "senha": False, "ua": "Mozilla/5.0 (teste)"}
+        return {"email": "", "abas": True, "senha": True, "ua": "Mozilla/5.0 (teste)"}
 
-    def get_cookies(self):
+    def cookies(self, host=None):
         return [{"name": "PHPSESSID", "value": "abc", "domain": "montesclaros.1doc.com.br", "path": "/"}]
 
-    def execute_script(self, js):
-        return "Mozilla/5.0 (teste)"
-
-    def quit(self):
+    def fechar(self):
         self.encerrado = True
 
 
@@ -90,7 +71,7 @@ def test_espera_o_login_sem_digitar_nada(dados, monkeypatch):
     assert cred.cookies[0]["name"] == "PHPSESSID" and cred.ua == "Mozilla/5.0 (teste)"
     assert nav.verificacoes >= 5             # esperou: não tomou a tela de login por logada
     assert nav.urls == [sessao.URL_LOGIN]     # só abriu a página
-    assert nav.acoes == []                    # nenhum send_keys, clear ou click
+    assert set(nav.scripts) == {sessao.JS_ESTADO}   # só leu: nada digitado nem clicado
     assert nav.encerrado                      # fechou o navegador
 
 
@@ -107,7 +88,7 @@ def test_pagina_de_login_em_outro_dominio_nao_conta(dados, monkeypatch):
     nav = NavegadorFalso(login_apos=0, fechar_apos=12, url_forcada="https://login.exemplo.com/?sis_usr_email")
     with pytest.raises(sessao.LoginCancelado, match="fechada"):
         _aguardar(nav)
-    assert nav.verificacoes == 0              # nem procurou o campo fora do domínio do 1Doc
+    assert nav.verificacoes == 0              # nem leu a página fora do domínio do 1Doc
 
 
 def test_janela_fechada_cancela_o_login(dados, monkeypatch):
@@ -213,3 +194,81 @@ def test_sem_conexao_durante_a_espera_continua_esperando(dados, monkeypatch):
             raise r
         return r
     assert _aguardar(NavegadorFalso(login_apos=1), validar=validar).setor == "SETOR"
+
+
+class _WsFalso:
+    """WebSocket do navegador: responde cada pedido com o resultado do método."""
+
+    def __init__(self, resultados):
+        self.resultados, self.pedidos = resultados, []
+
+    def settimeout(self, t):
+        pass
+
+    def send(self, texto):
+        import json
+        self.pedidos.append(json.loads(texto))
+
+    def recv(self):
+        import json
+        p = self.pedidos[-1]
+        return json.dumps({"id": p["id"], "result": self.resultados[p["method"]]})
+
+    def close(self):
+        pass
+
+
+def _navegador_falso(resultados):
+    class Processo:
+        def poll(self):
+            return None
+    return navegador.Navegador(Processo(), _WsFalso(resultados), "chrome")
+
+
+def test_cookies_do_navegador_so_os_do_1doc_no_formato_da_sessao_salva():
+    nav = _navegador_falso({"Storage.getCookies": {"cookies": [
+        {"name": "PHPSESSID", "value": "abc", "domain": "montesclaros.1doc.com.br", "path": "/",
+         "expires": -1, "session": True, "httpOnly": True, "secure": True, "sameSite": "Lax"},
+        {"name": "lembrar", "value": "1", "domain": ".1doc.com.br", "path": "/", "expires": 1893456000.5,
+         "session": False},
+        {"name": "NID", "value": "x", "domain": ".google.com", "path": "/", "expires": 1893456000},
+        {"name": "outra", "value": "y", "domain": "outra.1doc.com.br", "path": "/"}]}})
+    assert nav.cookies("montesclaros.1doc.com.br") == [
+        {"name": "PHPSESSID", "value": "abc", "domain": "montesclaros.1doc.com.br", "path": "/", "secure": True,
+         "httpOnly": True, "sameSite": "Lax"},
+        {"name": "lembrar", "value": "1", "domain": ".1doc.com.br", "path": "/", "secure": False,
+         "httpOnly": False, "expiry": 1893456000}]
+
+
+def test_cookies_salvos_voltam_ao_navegador_com_o_mesmo_alcance():
+    """Sessões salvas pela versão com Selenium continuam valendo no navegador invisível."""
+    so_host = navegador._cookie_cdp({"name": "PHPSESSID", "value": "abc", "domain": "montesclaros.1doc.com.br",
+                                     "path": "/", "secure": True, "httpOnly": True, "expiry": 1893456000,
+                                     "sameSite": "Lax"})
+    assert so_host == {"name": "PHPSESSID", "value": "abc", "path": "/", "url": "https://montesclaros.1doc.com.br/",
+                       "secure": True, "httpOnly": True, "sameSite": "Lax", "expires": 1893456000.0}
+    dominio = navegador._cookie_cdp({"name": "x", "value": "1", "domain": ".1doc.com.br", "path": "/"})
+    assert dominio["domain"] == ".1doc.com.br" and dominio["url"] == "http://1doc.com.br/"
+
+
+def test_automatico_usa_o_edge_quando_nao_ha_chrome(dados, monkeypatch):
+    tentativas = []
+
+    def criar(qual, perfil=None, headless=False):
+        tentativas.append((qual, perfil is not None))
+        if qual == "chrome":
+            raise navegador.ErroNavegador("Google Chrome não encontrado neste computador")
+        return "navegador-edge"
+    monkeypatch.setattr(sessao, "_criar_driver", criar)
+    monkeypatch.setattr(navegador, "localizar_executavel", lambda q: None if q == "chrome" else "msedge.exe")
+    assert sessao.abrir_navegador("auto") == ("navegador-edge", "edge")
+    assert tentativas == [("chrome", True), ("edge", True)]   # sem Chrome, nem tenta o perfil temporário
+
+
+def test_sem_navegador_explica_cada_tentativa(dados, monkeypatch):
+    def criar(qual, perfil=None, headless=False):
+        raise navegador.ErroNavegador(f"{navegador.NOMES[qual]} não encontrado neste computador")
+    monkeypatch.setattr(sessao, "_criar_driver", criar)
+    monkeypatch.setattr(navegador, "localizar_executavel", lambda q: None)
+    with pytest.raises(sessao.LoginCancelado, match="Google Chrome não encontrado(.|\n)*Microsoft Edge não"):
+        sessao.abrir_navegador("auto")

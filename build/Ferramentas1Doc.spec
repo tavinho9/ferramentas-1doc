@@ -4,15 +4,15 @@
 #   pyinstaller --noconfirm --clean build/Ferramentas1Doc.spec --distpath dist --workpath build/tmp
 import os
 
-from PyInstaller.utils.hooks import collect_all, collect_submodules
+from PyInstaller.utils.hooks import collect_submodules
 
 raiz = os.path.abspath(os.path.join(SPECPATH, ".."))
 icone = os.path.join(raiz, "ferramentas1doc", "gui", "icone.ico")
 
-# selenium inteiro, com o selenium-manager.exe (é ele que acha/baixa o driver do Chrome/Edge)
-datas, binaries, hiddenimports = collect_all("selenium")
-datas += [(icone, ".")]
-hiddenimports += collect_submodules("ferramentas1doc") + ["lxml.etree", "lxml._elementpath"]
+# Sem Selenium nem driver: o Chrome/Edge instalado é controlado por CDP (websocket-client).
+datas = [(icone, ".")]
+binaries = []
+hiddenimports = collect_submodules("ferramentas1doc") + ["lxml.etree", "lxml._elementpath"]
 
 a = Analysis(
     [os.path.join(raiz, "app.py")],

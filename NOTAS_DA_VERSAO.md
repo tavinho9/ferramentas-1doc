@@ -1,20 +1,15 @@
-## Ferramentas 1Doc 1.0.0
+## Ferramentas 1Doc 1.1.0
 
-Primeira versão instalável. Reúne os quatro scripts de consulta ao 1Doc
-numa janela:
+**O login não baixa mais nada da internet.** O programa passa a usar o Chrome
+(ou o Edge) que já está instalado, sem o "driver" que antes era baixado na
+primeira vez. Em redes que bloqueavam esse download, o login volta a
+funcionar.
 
-- **Processos do dia**
-- **Busca**
-- **Faltantes na planilha**
-- **Verificar planilha**
+Para você, nada muda: o navegador abre no 1Doc, você entra do jeito de
+sempre e o programa só espera. A sessão já guardada continua valendo, sem
+precisar entrar de novo.
 
-**Login:** o programa não pede usuário nem senha. Ele abre o navegador no 1Doc
-e espera você entrar. A sessão fica guardada até expirar. O botão *Sair do
-1Doc* apaga a sessão.
-
-**Instalação:** baixe o `Ferramentas1Doc-Setup-1.0.0.exe` abaixo e execute.
-Não precisa ser administrador. Se o Windows avisar "O Windows protegeu o
-computador", clique em *Mais informações → Executar assim mesmo*.
-
-As regras de etapa, os filtros e as colunas das planilhas são os mesmos dos
-scripts.
+**Instalação:** baixe o `Ferramentas1Doc-Setup-1.1.0.exe` abaixo e execute
+por cima da versão anterior. Não precisa ser administrador. Se o Windows
+avisar "O Windows protegeu o computador", clique em *Mais informações →
+Executar assim mesmo*.

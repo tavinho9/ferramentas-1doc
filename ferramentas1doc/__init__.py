@@ -5,5 +5,5 @@ O login é sempre feito pela própria pessoa, na janela do navegador: o
 programa só espera e reaproveita a sessão.
 """
 
-VERSAO = "1.0.0"
+VERSAO = "1.1.0"
 NOME_APP = "Ferramentas 1Doc"

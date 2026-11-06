@@ -6,9 +6,11 @@ programa só pode esperar — o teste confere que ele não detecta o login antes
 do envio, que os valores enviados são os da "pessoa" e que os cookies
 capturados valem nas requisições.
 
-Roda só quando há navegador e driver configurados:
-    FERRAMENTAS1DOC_CHROME=/caminho/chrome  FERRAMENTAS1DOC_CHROMEDRIVER=/caminho/chromedriver
-ou, no Windows (CI), com AUTOTESTE_NAVEGADOR_REAL=1 (Selenium Manager acha o driver).
+Não há driver: o navegador é controlado por CDP. Roda só quando há navegador
+configurado:
+    FERRAMENTAS1DOC_CHROME=/caminho/chrome
+ou, no Windows (CI), com AUTOTESTE_NAVEGADOR_REAL=1 (usa o Chrome/Edge
+instalado; AUTOTESTE_NAVEGADOR=edge testa o Edge).
 """
 
 import os
@@ -39,8 +41,29 @@ LOGIN = """<html><body>
   }, 2500);
 </script></body></html>"""
 
-PAINEL = """<html><body><input type="hidden" id="sis_usr_email" value="pessoa@montesclaros.mg.gov.br">
-<input type="hidden" id="s_s" value="SPOT-DCL-GP-CPPFI"><div class="tab-content">caixas</div></body></html>"""
+LOGADO = """<input type="hidden" id="sis_usr_email" value="pessoa@montesclaros.mg.gov.br">
+<input type="hidden" id="s_s" value="SPOT-DCL-GP-CPPFI">"""
+PAINEL = f"""<html><body>{LOGADO}<div class="tab-content">caixas</div></body></html>"""
+
+# "Localizar" do painel: como no 1Doc, o <select> fica escondido (select2) e o
+# resultado chega depois de uma ida ao servidor, trocando a URL da aba.
+PAINEL_LOCALIZAR = f"""<html><body>{LOGADO}
+<form class="form_localiza" onsubmit="return localizar(event)">
+  <select id="id_documento_rapido" style="display:none">
+    <option value="">--</option><option value="3">Proc. Administrativo</option></select>
+  <input id="num_codigo"><input id="localiza_ano"><button type="submit">Localizar</button>
+</form>
+<script>
+  function localizar(ev) {{
+    ev.preventDefault();
+    var tipo = document.getElementById('id_documento_rapido').value,
+        num = document.getElementById('num_codigo').value,
+        ano = document.getElementById('localiza_ano').value,
+        hash = (tipo === '3' && num === '31632' && ano === '2026') ? 'AAAA1111BBBB2222CCCC' : '';
+    setTimeout(function () {{ location.href = '/?pg=doc/ver&hash=' + hash + '&itd=3'; }}, 300);
+    return false;
+  }}
+</script></body></html>"""
 
 
 class Servidor(BaseHTTPRequestHandler):
@@ -62,7 +85,7 @@ class Servidor(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if "PHPSESSID=ok" in (self.headers.get("Cookie") or ""):
-            self._html(PAINEL)
+            self._html(PAINEL_LOCALIZAR if "caixa=entrada" in self.path else PAINEL)
         else:
             Servidor.inicio = Servidor.inicio or time.monotonic()
             self._html(LOGIN)
@@ -113,9 +136,38 @@ def test_navegador_invisivel_com_cookies_da_sessao(dados, monkeypatch):
     try:
         drv = nav.obter()
         assert drv is not None
-        drv.get(base + "?pg=painel/listar")
-        assert drv.find_element("id", "sis_usr_email").get_attribute("value") == "pessoa@montesclaros.mg.gov.br"
+        drv.ir(base + "?pg=painel/listar")
+        aba = drv.pagina()
+        email = "document.getElementById('sis_usr_email') && document.getElementById('sis_usr_email').value"
+        for _ in range(50):
+            if drv.avaliar(aba, email):
+                break
+            time.sleep(0.1)
+        assert drv.avaliar(aba, email) == "pessoa@montesclaros.mg.gov.br"
         assert nav.obter() is drv                           # reaproveita, não abre outro
+    finally:
+        nav.fechar()
+        srv.shutdown()
+    assert drv.processo.poll() is not None                  # fechou o navegador
+
+
+def test_localizar_pelo_navegador_invisivel(dados, monkeypatch):
+    """Último recurso dos verificadores: o formulário do painel, preenchido no navegador."""
+    from ferramentas1doc import faltantes, verificar_planilha
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), Servidor)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{srv.server_port}/"
+    cred = sessao.Credenciais(cookies=[{"name": "PHPSESSID", "value": "ok", "domain": "127.0.0.1", "path": "/",
+                                        "httpOnly": True}], ua="UA")
+    nav = sessao.NavegadorSobDemanda(cred, os.environ.get("AUTOTESTE_NAVEGADOR", "chrome"))
+    try:
+        drv = nav.obter()
+        assert drv is not None
+        for modulo in (faltantes, verificar_planilha):
+            monkeypatch.setattr(modulo, "URL_PAINEL", base + "?pg=painel/listar&meu=0&trocar=1&caixa=entrada")
+            assert modulo.localizar_navegador(drv, {"digitos": "31632", "ano": "2026"}) == ["AAAA1111BBBB2222CCCC"]
+            assert modulo.localizar_navegador(drv, {"digitos": "99999", "ano": "2026"}) == []
     finally:
         nav.fechar()
         srv.shutdown()

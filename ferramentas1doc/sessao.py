@@ -6,6 +6,9 @@ na janela, do jeito de sempre (inclusive captcha ou segundo fator, se houver).
 Detectado o login, os cookies e o User-Agent do navegador são copiados, a
 janela é fechada e todo o resto sai por HTTP, como nos scripts originais.
 
+O navegador é o Chrome ou o Edge já instalados, controlados pelo protocolo do
+próprio navegador (navegador.py): não há driver nem download.
+
 A sessão fica em sessao.json, na pasta de dados do usuário, e é reaproveitada
 nas execuções seguintes enquanto o 1Doc a aceitar. "Sair" apaga o arquivo e o
 perfil do navegador usado no login.
@@ -180,38 +183,17 @@ def verificar_cookies(cookies, ua, timeout=30):
 # ============================================================
 
 def _criar_driver(qual, perfil=None, headless=False):
-    """Chrome ou Edge pelo Selenium Manager (baixa o driver sozinho, como antes)."""
-    from selenium import webdriver
+    """Chrome ou Edge já instalados, controlados por CDP (sem driver, nada baixado)."""
+    from . import navegador as nav_cdp
 
-    if qual == "edge":
-        opts, cls, svc_cls = webdriver.EdgeOptions(), webdriver.Edge, webdriver.EdgeService
-    else:
-        opts, cls, svc_cls = webdriver.ChromeOptions(), webdriver.Chrome, webdriver.ChromeService
-    if headless:
-        opts.add_argument("--headless=new")
-        opts.add_argument("--window-size=1920,1080")
-    if perfil:
-        os.makedirs(perfil, exist_ok=True)
-        opts.add_argument(f"--user-data-dir={perfil}")
-    opts.add_argument("--no-first-run")
-    opts.add_argument("--no-default-browser-check")
-    # Só para desenvolvimento/testes: binário e driver fora do lugar padrão
-    if qual == "chrome" and os.environ.get("FERRAMENTAS1DOC_CHROME"):
-        opts.binary_location = os.environ["FERRAMENTAS1DOC_CHROME"]
-        opts.add_argument("--no-sandbox")
-    driver_path = os.environ.get("FERRAMENTAS1DOC_CHROMEDRIVER") if qual == "chrome" else None
-    servico = svc_cls(executable_path=driver_path) if driver_path else svc_cls()
-    if os.name == "nt":
-        import subprocess
-        servico.creation_flags = subprocess.CREATE_NO_WINDOW   # sem janela preta do driver
-    drv = cls(options=opts, service=servico)
-    drv.implicitly_wait(0)
-    return drv
+    return nav_cdp.Navegador.abrir(qual, perfil=perfil, headless=headless)
 
 
 def abrir_navegador(navegador="auto", headless=False, usar_perfil=True, avisar=print):
-    """Devolve (driver, nome). Em "auto": Chrome, depois Edge. Se o perfil
+    """Devolve (navegador, nome). Em "auto": Chrome, depois Edge. Se o perfil
     próprio estiver travado (outra janela do login aberta), tenta sem ele."""
+    from . import navegador as nav_cdp
+
     ordem = ["chrome", "edge"] if navegador == "auto" else [navegador]
     erros = []
     for qual in ordem:
@@ -219,51 +201,48 @@ def abrir_navegador(navegador="auto", headless=False, usar_perfil=True, avisar=p
         for perfil in perfis:
             try:
                 return _criar_driver(qual, perfil, headless), qual
-            except Exception as e:      # WebDriverException, SessionNotCreated, OSError...
+            except (nav_cdp.ErroNavegador, OSError) as e:
                 erros.append(f"{qual}{' (perfil próprio)' if perfil else ''}: {str(e).splitlines()[0][:160]}")
+                if not nav_cdp.localizar_executavel(qual):
+                    break           # não instalado: o perfil temporário também não vai abrir
     raise LoginCancelado("não consegui abrir o navegador.\n  " + "\n  ".join(erros))
 
 
 NOMES = {"chrome": "Google Chrome", "edge": "Microsoft Edge"}
 
+# Única coisa que o programa executa nas páginas durante o login: lê, não digita nem clica.
+JS_ESTADO = """(function () {
+  var e = document.getElementById('sis_usr_email');
+  return {email: e ? (e.value || '').trim() : '',
+          abas: !!document.querySelector('.tab-content'),
+          senha: !!document.querySelector('input[type=password]'),
+          ua: navigator.userAgent};
+})()"""
+
 
 def _pagina_logada(drv, host):
-    """True se a aba atual é uma página do 1Doc com usuário logado. O sinal é o
-    campo #sis_usr_email preenchido, que só existe em páginas logadas (o mesmo
-    teste do busca_1doc); a área de abas (.tab-content), que era o sinal dos
-    outros scripts, vale como reserva desde que não haja campo de senha."""
-    from selenium.webdriver.common.by import By
+    """Estado da primeira aba do 1Doc com usuário logado ({email, ua, ...}), ou
+    None. O sinal é o campo #sis_usr_email preenchido, que só existe em
+    páginas logadas (o mesmo teste do busca_1doc); a área de abas
+    (.tab-content), que era o sinal dos outros scripts, vale como reserva desde
+    que não haja campo de senha. Abas de outros domínios (SSO) não contam."""
+    from . import navegador as nav_cdp
 
-    if (urlparse(drv.current_url).hostname or "") != host:
-        return False
-    el = drv.find_elements(By.ID, "sis_usr_email")
-    if el and (el[0].get_attribute("value") or "").strip():
-        return True
-    return bool(drv.find_elements(By.CSS_SELECTOR, ".tab-content")) and \
-        not drv.find_elements(By.CSS_SELECTOR, "input[type=password]")
+    for pag in drv.paginas():
+        if (urlparse(pag["url"]).hostname or "") != host:
+            continue
+        try:
+            estado = drv.avaliar(pag["id"], JS_ESTADO)
+        except nav_cdp.ErroNavegador:
+            continue                # página carregando / trocando
+        if isinstance(estado, dict) and (estado.get("email") or (estado.get("abas") and not estado.get("senha"))):
+            return estado
+    return None
 
 
 def _janela_viva(drv):
-    """Garante que o driver aponta para uma janela aberta. False se a pessoa
-    fechou todas (ou o navegador)."""
-    from selenium.common.exceptions import WebDriverException
-
-    try:
-        drv.current_url
-        return True
-    except WebDriverException:
-        pass
-    try:
-        abas = drv.window_handles
-    except WebDriverException:
-        return False
-    if not abas:
-        return False
-    try:
-        drv.switch_to.window(abas[-1])
-        return True
-    except WebDriverException:
-        return False
+    """False se a pessoa fechou todas as janelas (ou o navegador)."""
+    return drv.viva()
 
 
 def aguardar_login(navegador="auto", minutos=10, avisar=print, fabrica=None, validar=None,
@@ -271,9 +250,9 @@ def aguardar_login(navegador="auto", minutos=10, avisar=print, fabrica=None, val
     """Abre o navegador no 1Doc e espera a pessoa fazer o login. Não preenche
     nem clica em nada. Devolve Credenciais já validadas por HTTP.
 
-    fabrica() -> (driver, nome) e validar(cookies, ua) -> (setor, email)|None
+    fabrica() -> (navegador, nome) e validar(cookies, ua) -> (setor, email)|None
     existem para os testes; por padrão, abrir_navegador e verificar_cookies."""
-    from selenium.common.exceptions import WebDriverException
+    from . import navegador as nav_cdp
 
     fabrica = fabrica or (lambda: abrir_navegador(navegador, avisar=avisar))
     validar = validar or verificar_cookies
@@ -282,8 +261,8 @@ def aguardar_login(navegador="auto", minutos=10, avisar=print, fabrica=None, val
     drv, nome = fabrica()
     try:
         try:
-            drv.get(URL_LOGIN)
-        except WebDriverException as e:
+            drv.ir(URL_LOGIN)
+        except nav_cdp.ErroNavegador as e:
             raise LoginCancelado(f"o navegador não abriu o 1Doc ({str(e).splitlines()[0][:120]})")
         avisar(f"→ Faça o login no 1Doc na janela do {NOMES.get(nome, nome)} que abriu.")
         avisar(f"  O programa está esperando (até {minutos} min). Ele não digita nada: "
@@ -298,16 +277,16 @@ def aguardar_login(navegador="auto", minutos=10, avisar=print, fabrica=None, val
                 raise LoginCancelado("a janela do navegador foi fechada antes do login")
             try:
                 logado = _pagina_logada(drv, host)
-            except WebDriverException:
-                logado = False          # página carregando / trocando
+            except nav_cdp.ErroNavegador:
+                logado = None
             if logado and time.monotonic() - ultima_validacao >= intervalo_validacao:
                 ultima_validacao = time.monotonic()
                 esperar(1.0)            # deixa o 1Doc terminar de gravar os cookies
                 try:
-                    cookies = drv.get_cookies()
-                    ua = drv.execute_script("return navigator.userAgent;")
-                except WebDriverException:
+                    cookies = drv.cookies(host)
+                except nav_cdp.ErroNavegador:
                     continue
+                ua = logado.get("ua") or ""
                 checar_cancelamento()
                 try:
                     ok = validar(cookies, ua)
@@ -323,7 +302,7 @@ def aguardar_login(navegador="auto", minutos=10, avisar=print, fabrica=None, val
             esperar(intervalo)
     finally:
         try:
-            drv.quit()
+            drv.fechar()
         except Exception:
             pass
 
@@ -388,14 +367,7 @@ class NavegadorSobDemanda:
         try:
             drv, _ = abrir_navegador(self.navegador or config.carregar()["navegador"],
                                      headless=True, usar_perfil=False)
-            drv.get(BASE + "robots.txt")      # precisa estar no domínio para aceitar os cookies
-            for c in self.cred.cookies:
-                c = {k: v for k, v in c.items() if k in ("name", "value", "path", "domain", "secure",
-                                                          "httpOnly", "expiry")}
-                try:
-                    drv.add_cookie(c)
-                except Exception:
-                    pass
+            drv.definir_cookies(self.cred.cookies)
             self._drv = drv
         except Exception as e:
             self._falhou = True
@@ -405,7 +377,7 @@ class NavegadorSobDemanda:
     def fechar(self):
         if self._drv is not None:
             try:
-                self._drv.quit()
+                self._drv.fechar()
             except Exception:
                 pass
             self._drv = None

@@ -49,7 +49,7 @@ COMO O PROCESSO É LOCALIZADO (do mais barato ao mais caro)
   2. Hiperlink já existente na célula do número (se a planilha tiver).
   3. Formulário "Localizar" do painel (formEmissao.php?formAcessoRapido,
      tipo Proc. Administrativo + número + ano) enviado por HTTP.
-  4. O mesmo formulário preenchido num navegador invisível (Selenium), com
+  4. O mesmo formulário preenchido num navegador invisível (Chrome/Edge), com
      os cookies da sessão, caso o servidor não devolva o hash por HTTP. Ele
      só é aberto se este passo for necessário.
 Todo hash obtido em 2–4 é conferido no detalhe pelo campo #nome_em
@@ -119,7 +119,7 @@ from openpyxl.utils import column_index_from_string, get_column_letter
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-from . import caminhos, config, sessao as sessao_1doc
+from . import caminhos, config, navegador, sessao as sessao_1doc
 
 
 # ============================================================
@@ -419,35 +419,15 @@ def localizar_http(sessao, item):
     return _candidatos_resposta(r)
 
 
-def localizar_selenium(driver, item):
+def localizar_navegador(driver, item):
     """Preenche o 'Localizar' do painel no navegador e lê o hash da URL."""
-    from selenium.common.exceptions import TimeoutException, WebDriverException
-    from selenium.webdriver.common.by import By
-    from selenium.webdriver.support import expected_conditions as EC
-    from selenium.webdriver.support.ui import WebDriverWait
-
     try:
-        driver.get(URL_PAINEL)
-        wait = WebDriverWait(driver, TIMEOUT)
-        num = wait.until(EC.presence_of_element_located((By.ID, "num_codigo")))
-        # O <select> é escondido pelo select2; define o valor no próprio
-        # elemento nativo, que é o que o formulário envia.
-        driver.execute_script(
-            "var s=document.getElementById('id_documento_rapido');"
-            "s.value=arguments[0];"
-            "s.dispatchEvent(new Event('change',{bubbles:true}));", ID_DOCUMENTO)
-        num.clear()
-        num.send_keys(item["digitos"])
-        ano = driver.find_element(By.ID, "localiza_ano")
-        ano.clear()
-        ano.send_keys(item["ano"])
-        url_antes = driver.current_url
-        driver.find_element(By.CSS_SELECTOR, "form.form_localiza button[type='submit']").click()
-        WebDriverWait(driver, TIMEOUT).until(
-            lambda d: hash_de(d.current_url) or (d.current_url != url_antes and "pg=doc/ver" in d.current_url))
-        return [h for h in [hash_de(driver.current_url)] if h]
-    except (TimeoutException, WebDriverException):
+        url = navegador.localizar_no_painel(
+            driver, URL_PAINEL, ID_DOCUMENTO, item["digitos"], item["ano"], TIMEOUT,
+            achou=lambda u, antes: hash_de(u) or (u != antes and "pg=doc/ver" in u))
+    except navegador.ErroNavegador:
         return []
+    return [h for h in [hash_de(url or "")] if h]
 
 
 _RE_NOME_EM = re.compile(r"""<input\b[^>]*\bid\s*=\s*["']nome_em["'][^>]*>""", re.I)
@@ -1063,7 +1043,7 @@ def abrir(ctx, item, link=None):
                     # navegador invisível aberto só agora, na 1ª vez que precisar
                     with ctx.lock_driver:
                         drv = ctx.driver.obter()
-                        hashes = localizar_selenium(drv, item) if drv is not None else []
+                        hashes = localizar_navegador(drv, item) if drv is not None else []
                 else:
                     hashes = []
             except requests.RequestException:
