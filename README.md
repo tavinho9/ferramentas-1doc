@@ -51,12 +51,17 @@ do Windows → Aplicativos → Ferramentas 1Doc → Desinstalar.
    Excel ao terminar. Isso pode ser desligado em **Configurações**.
 
 Os campos de data têm, ao lado, um botão de calendário: ele abre o mês logo
-abaixo do campo, e clicar num dia escreve a data (DD/MM/AAAA). As setas do
-teclado mudam o dia, PageUp/PageDown o mês e Enter escolhe. Esc ou um clique
-fora fecham o calendário sem mudar nada, e **Limpar** esvazia o campo. Onde uma
-data futura não vale (o dia em *Processos do dia* e o início do período em
-*Faltantes*), os dias depois de hoje aparecem apagados. Digitar a data continua
-valendo, com os mesmos formatos de antes.
+abaixo do campo, e clicar num dia escreve a data (DD/MM/AAAA). Para ir a outro
+mês ou ano sem passar mês a mês, clique no título do calendário (*março de
+2025 ▾*): ele mostra os 12 meses do ano. Clicando no título de novo (*2025 ▾*),
+aparecem os anos da década. Escolha o ano, depois o mês, e o calendário volta
+aos dias. Nessas grades, ◀ ▶ e a roda do mouse passam o ano ou a década. No
+teclado, as setas mudam o dia, PageUp/PageDown o mês, Shift+PageUp/PageDown o
+ano e Enter escolhe. Esc ou um clique fora fecham o calendário sem mudar nada,
+e **Limpar** esvazia o campo. Onde uma data futura não vale (o dia em
+*Processos do dia* e o início do período em *Faltantes*), os dias, meses e anos
+depois de hoje aparecem apagados. Digitar a data continua valendo, com os
+mesmos formatos de antes.
 
 Se a janela estiver pequena (ou o Windows usar escala de 125–150%), o
 formulário da aba ganha barra de rolagem, e a roda do mouse rola o formulário.
