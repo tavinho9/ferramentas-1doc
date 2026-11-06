@@ -39,7 +39,7 @@ def autoteste(relatorio=None, navegador=True, janela=True):
         import importlib
         import ferramentas1doc
         from ferramentas1doc import caminhos
-        for m in ("busca", "busca_argv", "config", "faltantes", "processos_do_dia", "sessao",
+        for m in ("busca", "busca_argv", "config", "faltantes", "navegador", "processos_do_dia", "sessao",
                   "verificar_planilha", "gui.janela", "gui.abas", "gui.log", "gui.secundaria"):
             importlib.import_module(f"ferramentas1doc.{m}")
         return f"versão {ferramentas1doc.VERSAO}, dados em {caminhos.pasta_dados()}"
@@ -70,22 +70,28 @@ def autoteste(relatorio=None, navegador=True, janela=True):
         wb.save(caminho)
         assert load_workbook(caminho).active["A1"].value == "Nº Processo"
 
-    def selenium_manager():
-        from selenium.webdriver.common.selenium_manager import SeleniumManager
-        binario = SeleniumManager()._get_binary()
-        assert os.path.isfile(binario), binario
-        return str(binario)
+    def navegador_instalado():
+        from ferramentas1doc import navegador
+        achados = {q: navegador.localizar_executavel(q) for q in ("chrome", "edge")}
+        assert any(achados.values()), "nem Chrome nem Edge encontrados"
+        return "; ".join(f"{navegador.NOMES[q]}: {c or 'não encontrado'}" for q, c in achados.items())
 
     def abrir_navegador():
+        import time
         from ferramentas1doc import sessao
         drv, nome = sessao.abrir_navegador(os.environ.get("AUTOTESTE_NAVEGADOR", "auto"),
                                            headless=True, usar_perfil=False)
         try:
-            drv.get("data:text/html,<title>ok</title><input id='sis_usr_email' value='x'>")
-            assert drv.title == "ok"
-            return f"{nome} {drv.capabilities.get('browserVersion', '')}"
+            drv.ir("data:text/html,<title>ok</title><input id='sis_usr_email' value='x'>")
+            aba = drv.pagina()
+            for _ in range(50):
+                if drv.avaliar(aba, "document.title") == "ok":
+                    break
+                time.sleep(0.1)
+            assert drv.avaliar(aba, "document.getElementById('sis_usr_email').value") == "x"
+            return f"{nome} {drv.versao()}"
         finally:
-            drv.quit()
+            drv.fechar()
 
     def montar_janela():
         from ferramentas1doc.gui.janela import Janela
@@ -101,9 +107,9 @@ def autoteste(relatorio=None, navegador=True, janela=True):
     item("leitura de HTML", parser_html)
     item("argumentos da busca", argumentos_busca)
     item("planilha .xlsx", planilha)
-    item("selenium-manager no pacote", selenium_manager)
+    item("Chrome/Edge instalado", navegador_instalado)
     if navegador:
-        item("navegador (invisível) pelo Selenium Manager", abrir_navegador)
+        item("navegador (invisível) controlado sem driver", abrir_navegador)
     if janela:
         item("janela principal", montar_janela)
     linhas.append(f"\n{'TUDO CERTO' if not falhas else f'{falhas} FALHA(S)'}")

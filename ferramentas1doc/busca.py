@@ -12,7 +12,7 @@ para o "Inbox de <setor>" (o mesmo link do menu), porque a caixa segue o inbox a
 
 Como funciona
   1. Sessão — reaproveita os cookies salvos da última execução. Se expiraram,
-     abre o navegador (Selenium) e espera você fazer o login nele; então
+     abre o navegador (Chrome/Edge) e espera você fazer o login nele; então
      captura os cookies. Usuário e senha nunca passam pelo programa
      (ferramentas1doc.sessao).
   2. Listagem — lê as caixas do seu setor (Em aberto, Saída, Arquivados,
@@ -28,7 +28,7 @@ Como funciona
   5. Filtros e saída — .xlsx com abas Resultado, Transições e Parâmetros
      (CSV opcional) e um resumo no terminal.
 
-Dependências:  pip install selenium requests beautifulsoup4 openpyxl
+Dependências:  pip install websocket-client requests beautifulsoup4 openpyxl
                (lxml é opcional e acelera a leitura das páginas)
 
 Exemplos: python -m ferramentas1doc.busca --help
@@ -58,7 +58,7 @@ try:
     from urllib3.util.retry import Retry
     from bs4 import BeautifulSoup, Comment, NavigableString
 except ImportError as _e:  # pragma: no cover
-    sys.exit(f"Dependência ausente ({_e.name}). Instale: pip install selenium requests beautifulsoup4 openpyxl")
+    sys.exit(f"Dependência ausente ({_e.name}). Instale: pip install websocket-client requests beautifulsoup4 openpyxl")
 
 import importlib.util
 

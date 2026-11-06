@@ -110,11 +110,10 @@ planilha* não precisa reabrir todos os arquivados.
 ## Se algo não funcionar
 
 - **O navegador não abre.** O programa usa o Chrome; se não houver Chrome,
-  usa o Edge. Na primeira vez, o Selenium baixa o "driver" do navegador da
-  internet (como nos scripts antigos). Se a rede bloquear esse download,
-  escolha o outro navegador em Configurações, ou peça liberação de
-  `googlechromelabs.github.io` / `storage.googleapis.com` (Chrome) ou
-  `msedgedriver.microsoft.com` (Edge).
+  usa o Edge (que já vem no Windows). Ele usa o navegador instalado e não
+  baixa nada da internet: não há "driver". Se o Chrome não abrir, escolha o
+  Edge em Configurações. A mensagem em *Mensagens* mostra o motivo de cada
+  tentativa.
 - **"Login não concluído: tempo esgotado".** O programa espera 10 minutos por
   padrão. O tempo pode ser aumentado em Configurações.
 - **"Sessão recusada" no meio da execução.** A sessão do 1Doc expirou. Execute
