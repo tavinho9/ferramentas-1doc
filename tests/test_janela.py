@@ -110,37 +110,31 @@ def _dialogo_configuracoes(j):
     return abertos[0]
 
 
-def _principal_desabilitada(j):
-    return os.name == "nt" and bool(int(j.attributes("-disabled")))
+def _principal_livre(j):
+    """Nem grab do Tk nem janela desabilitada: os dois fazem o Windows ignorar
+    minimizar e restaurar a principal (ver gui/secundaria.py)."""
+    return j.grab_current() is None and not (os.name == "nt" and int(j.attributes("-disabled")))
 
 
-def test_configuracoes_uma_so_e_a_principal_volta_ao_fechar(janela):
+def test_configuracoes_uma_so_presa_a_principal(janela):
     j = janela
     j._configuracoes()
     _processar(j)
     d = _dialogo_configuracoes(j)
     j._configuracoes()                      # clicar de novo traz a mesma, não abre outra
     _processar(j)
-    assert _dialogo_configuracoes(j) is d
+    assert _dialogo_configuracoes(j) is d and j.dialogo_configuracoes is d
     assert d.winfo_viewable()
     assert str(d.transient()) == str(j)     # presa à principal: minimiza e volta junto
-    if os.name == "nt":                     # modal sem grab do Tk (ver Dialogo)
-        assert _principal_desabilitada(j) and j.grab_current() is None
-    else:
-        assert j.grab_current() is d
-
-    d.fechar()                              # Cancelar, Salvar, Esc e o X passam por aqui
+    assert _principal_livre(j)
+    d.destroy()                             # Cancelar, Salvar, Esc e o X
     _processar(j)
-    assert not d.winfo_exists()
-    assert j.grab_current() is None and not _principal_desabilitada(j)
-
     j._configuracoes()                      # fechada, abre de novo
     _processar(j)
     d2 = _dialogo_configuracoes(j)
-    assert d2 is not d
-    d2.destroy()                            # destruída por outro caminho: a principal volta igual
+    assert d2 is not d and d2.winfo_viewable()
+    d2.destroy()
     _processar(j)
-    assert j.grab_current() is None and not _principal_desabilitada(j)
 
 
 def test_opcoes_da_busca_uma_so_presa_a_principal(janela):
@@ -153,7 +147,7 @@ def test_opcoes_da_busca_uma_so_presa_a_principal(janela):
     assert aba.janela_ajuda is o
     assert [w for w in aba.winfo_children() if isinstance(w, tk.Toplevel)] == [o]
     assert str(o.transient()) == str(janela)
-    assert janela.grab_current() is None and not _principal_desabilitada(janela)   # não é modal
+    assert _principal_livre(janela)
     o.destroy()
     _processar(janela)
     aba._ajuda()
@@ -164,11 +158,13 @@ def test_opcoes_da_busca_uma_so_presa_a_principal(janela):
 
 
 @pytest.mark.skipif(os.name != "nt", reason="minimizar e restaurar como o Windows faz (só no Windows)")
-def test_com_configuracoes_aberta_o_programa_minimiza_e_volta(janela):
+@pytest.mark.parametrize("qual", ["Configurações", "Opções da busca"])
+def test_com_janela_secundaria_aberta_o_programa_minimiza_e_volta(janela, qual):
     """Com a janela de Configurações aberta, o programa minimizado tem de voltar
-    pelo botão da barra de tarefas. Com um grab do Tk, o Tk do Windows descarta
-    os comandos de sistema da janela principal (WM_SYSCOMMAND), inclusive o
-    "restaurar": minimizada pelo Win+D, ela não voltava mais."""
+    pelo botão da barra de tarefas. Com um grab do Tk (e também com a principal
+    desabilitada), o Windows ignora os comandos de sistema da janela principal
+    (WM_SYSCOMMAND), inclusive o "restaurar": minimizada pelo Win+D, ela não
+    voltava mais."""
     import ctypes
     from ctypes import wintypes
     user32 = ctypes.WinDLL("user32")
@@ -181,9 +177,14 @@ def test_com_configuracoes_aberta_o_programa_minimiza_e_volta(janela):
 
     j = janela
     principal = int(j.wm_frame(), 16)
-    j._configuracoes()
-    _processar(j)
-    d = _dialogo_configuracoes(j)
+    if qual == "Configurações":
+        j._configuracoes()
+        _processar(j)
+        d = _dialogo_configuracoes(j)
+    else:
+        j.abas[1]._ajuda()
+        _processar(j)
+        d = j.abas[1].janela_ajuda
     dialogo = int(d.wm_frame(), 16)
     try:
         # "Mostrar área de trabalho" (Win+D): minimiza sem passar por WM_SYSCOMMAND
@@ -208,5 +209,5 @@ def test_com_configuracoes_aberta_o_programa_minimiza_e_volta(janela):
         assert user32.IsWindowVisible(dialogo) and d.winfo_viewable()
     finally:
         user32.ShowWindow(principal, SW_RESTORE)
-        getattr(d, "fechar", d.destroy)()
+        d.destroy()
         _processar(j)

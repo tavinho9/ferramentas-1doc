@@ -11,6 +11,7 @@ from datetime import date, datetime, timedelta
 from tkinter import filedialog, ttk
 
 from .. import busca_argv, caminhos, config
+from .secundaria import JanelaSecundaria, abrir_unica
 
 DIAS_SEMANA = ("segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira",
                "sábado", "domingo")
@@ -211,19 +212,11 @@ class AbaBusca(ttk.Frame):
             self.v["numeros_arquivo"].set(os.path.normpath(c))
 
     def _ajuda(self):
+        self.janela_ajuda = abrir_unica(self.janela_ajuda, self._criar_ajuda)
+
+    def _criar_ajuda(self):
         from .. import busca
-        if self.janela_ajuda is not None and self.janela_ajuda.winfo_exists():
-            self.janela_ajuda.deiconify()
-            self.janela_ajuda.lift()
-            self.janela_ajuda.focus_force()
-            return
-        # Não é modal (dá para escrever em "Outras opções" com ela aberta), mas
-        # fica presa à principal: minimiza e volta junto e não some atrás dela.
-        janela = self.janela_ajuda = tk.Toplevel(self)
-        janela.transient(self.winfo_toplevel())
-        janela.bind("<Escape>", lambda _e: janela.destroy())
-        janela.title("Opções da busca")
-        janela.geometry("900x620")
+        janela = JanelaSecundaria(self, "Opções da busca")
         t = tk.Text(janela, wrap="none", font=("Consolas", 9))
         sb = ttk.Scrollbar(janela, command=t.yview)
         t.configure(yscrollcommand=sb.set)
@@ -234,6 +227,8 @@ class AbaBusca(ttk.Frame):
                         "Textos com espaço vão entre aspas: --cita-setor \"SPOT-DCL-GP-CPPFI\"\n\n"
                  + busca.montar_parser().format_help())
         t.configure(state="disabled")
+        janela.mostrar(900, 620)
+        return janela
 
     def formulario(self):
         dados = {k: v.get() for k, v in self.v.items()}
