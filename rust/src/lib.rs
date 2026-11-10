@@ -16,6 +16,7 @@ pub mod saida;
 
 pub mod ambiente;
 pub mod arquivos;
+pub mod autoteste;
 pub mod busca;
 pub mod busca_argv;
 pub mod caminhos;
@@ -25,6 +26,7 @@ pub mod config;
 pub mod datas;
 pub mod erro;
 pub mod faltantes;
+pub mod gui;
 
 pub mod http;
 pub mod navegador;

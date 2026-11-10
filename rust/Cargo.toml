@@ -23,12 +23,14 @@ path = "src/bin/ferramentas1doc-cli.rs"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 clap = { version = "4.5", features = ["derive", "wrap_help"] }
 csv = "1.3"
-eframe = { version = "0.37", default-features = false, features = ["default_fonts", "glow", "wayland", "x11", "accesskit"] }
+eframe = { version = "0.37", default-features = false, features = ["default_fonts", "glow", "wgpu", "wayland", "x11", "accesskit"] }
 ego-tree = "0.11"
 egui = "0.37"
+egui-wgpu = "0.37"
 encoding_rs = "0.8"
 fancy-regex = "0.20"
 opener = "0.9"
+pollster = "0.4"
 regex = "1.11"
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "cookies", "charset", "system-proxy", "rustls-no-provider", "form", "query"] }
 rfd = "0.18"
