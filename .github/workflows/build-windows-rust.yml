@@ -1,0 +1,140 @@
+name: Instalador Windows (Rust)
+
+on:
+  push:
+    branches: [main]
+    tags: ["rust-v*"]
+  release:
+    types: [published]     # Release criada pela página do GitHub (tag rust-v*): o instalador é anexado sozinho
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+defaults:
+  run:
+    working-directory: rust
+
+jobs:
+  linux:
+    name: Testes (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+      - name: Formatação
+        run: cargo fmt --check
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Testes
+        run: cargo test
+
+  windows:
+    name: Testes, paridade e instalador (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Testes (inclui login com Chrome real e a janela)
+        env:
+          AUTOTESTE_NAVEGADOR_REAL: "1"
+        run: cargo test
+
+      - name: Paridade com a versão Python
+        shell: pwsh
+        run: |
+          pip install -r ..\requirements.txt
+          $pasta = Join-Path $env:RUNNER_TEMP "paridade"
+          python paridade\gerar_python.py $pasta
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          $env:PARIDADE_PASTA = $pasta
+          cargo test --test paridade
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          python paridade\comparar.py $pasta
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Versão
+        id: versao
+        shell: pwsh
+        run: |
+          $v = (Select-String -Path Cargo.toml -Pattern '^version = "(.*)"').Matches[0].Groups[1].Value
+          "versao=$v" >> $env:GITHUB_OUTPUT
+
+      - name: Compilar (release)
+        run: cargo build --release
+
+      - name: Autoteste do executável
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath "target\release\Ferramentas1Doc.exe" `
+               -ArgumentList '--autoteste','--relatorio','autoteste-pacote.txt' -Wait -PassThru
+          Get-Content autoteste-pacote.txt
+          if ($p.ExitCode -ne 0) { exit 1 }
+
+      - name: Compilar o instalador (Inno Setup)
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup -y --no-progress
+          }
+          & $iscc "/DMyAppVersion=${{ steps.versao.outputs.versao }}" build\installer.iss
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Instalar, testar o instalado e desinstalar
+        shell: pwsh
+        run: |
+          $setup = Get-ChildItem ..\dist\Ferramentas1Doc-Rust-Setup-*.exe | Select-Object -First 1
+          $p = Start-Process $setup.FullName -Wait -PassThru `
+               -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/CURRENTUSER','/NORESTART','/LOG=instalacao.log'
+          $pasta = "$env:LOCALAPPDATA\Programs\Ferramentas 1Doc Rust"
+          $exe = "$pasta\Ferramentas1Doc.exe"
+          if ($p.ExitCode -ne 0 -or -not (Test-Path $exe)) { Get-Content instalacao.log; exit 1 }
+          if (-not (Test-Path "$pasta\ferramentas1doc-cli.exe")) { Write-Error "linha de comando não instalada"; exit 1 }
+          $atalho = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Ferramentas 1Doc (Rust).lnk"
+          if (-not (Test-Path $atalho)) { Write-Error "atalho do menu Iniciar não criado"; exit 1 }
+          $p = Start-Process $exe -ArgumentList '--autoteste','--relatorio','autoteste-instalado.txt' -Wait -PassThru
+          Get-Content autoteste-instalado.txt
+          if ($p.ExitCode -ne 0) { exit 1 }
+          Start-Process "$pasta\unins000.exe" -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait
+          for ($i = 0; $i -lt 30 -and (Test-Path $exe); $i++) { Start-Sleep 1 }
+          if (Test-Path $exe) { Write-Error "a desinstalação deixou o executável"; exit 1 }
+          Write-Host "Instalação, autoteste e desinstalação OK"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Ferramentas1Doc-Rust-Setup-${{ steps.versao.outputs.versao }}
+          path: dist/Ferramentas1Doc-Rust-Setup-*.exe
+          if-no-files-found: error
+
+      - name: Anexar o instalador à Release (tag rust-v*)
+        if: startsWith(github.ref, 'refs/tags/rust-v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          # idempotente: se a Release já existe (criada à mão ou por execução anterior), só troca o instalador
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" ../dist/Ferramentas1Doc-Rust-Setup-*.exe --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" ../dist/Ferramentas1Doc-Rust-Setup-*.exe \
+              --title "Ferramentas 1Doc (Rust) ${GITHUB_REF_NAME#rust-v}" --notes-file NOTAS_DA_VERSAO.md
+          fi

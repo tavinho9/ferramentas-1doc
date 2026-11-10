@@ -125,6 +125,15 @@ planilha* não precisa reabrir todos os arquivados.
   alarme falso. Peça ao suporte para liberar a pasta
   `%LOCALAPPDATA%\Programs\Ferramentas 1Doc`.
 
+## Versão em Rust
+
+Em `rust/` está a mesma ferramenta reescrita em Rust, com as mesmas abas,
+regras e planilhas. Ela é instalada à parte (*Ferramentas 1Doc (Rust)*, pelo
+`Ferramentas1Doc-Rust-Setup-<versão>.exe` das Releases com tag `rust-v…`) e
+pode ficar junto com esta versão. As duas usam a mesma pasta de dados, então
+a sessão e os caches valem para as duas. Detalhes em
+[rust/README.md](rust/README.md).
+
 ## Para quem for mexer no código
 
 ```
