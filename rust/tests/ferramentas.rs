@@ -107,3 +107,69 @@ fn cancelar_interrompe() {
         Erro::Cancelado
     );
 }
+
+#[test]
+fn busca() {
+    use ferramentas1doc::{busca, busca_argv};
+    let fake = comum::Fake1Doc::novo();
+    let d = comum::dados(&fake.base);
+    let form = busca_argv::Formulario {
+        caixas: vec!["entrada".into()],
+        ..Default::default()
+    }
+    .com("etapa", "Pesquisa de Mercado")
+    .marcar("csv");
+    let mut argv = busca_argv::montar_argv(
+        &form,
+        Some(&d.pasta_saida()),
+        chrono::Local::now().naive_local(),
+        false,
+    )
+    .unwrap();
+    argv.extend(["--pausa".into(), "0".into()]);
+    let res = busca::main(&d.amb, &argv, Some(&comum::cred()))
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        res.regs
+            .iter()
+            .map(|r| r.numero.as_str())
+            .collect::<Vec<_>>(),
+        ["31.632/2026"]
+    );
+    let arquivo = res.arquivo.unwrap();
+    assert_eq!(arquivo.parent().unwrap(), d.pasta_saida());
+    let col_a: Vec<String> = comum::valores(&arquivo, Some("Resultado"))
+        .into_iter()
+        .map(|l| l[0].clone())
+        .collect();
+    assert_eq!(col_a, ["Nº Processo", "31.632/2026"]);
+    assert!(
+        std::fs::read_dir(d.pasta_saida()).unwrap().any(|e| e
+            .unwrap()
+            .path()
+            .extension()
+            .is_some_and(|x| x == "csv"))
+    );
+    assert!(d.pasta_dados().join("1doc_cache.json").is_file()); // cache na pasta de dados
+
+    // a mesma consulta sem acessar o 1Doc, só com o cache
+    fake.deslogar();
+    let argv: Vec<String> = [
+        "--offline",
+        "--antes-de",
+        "Pesquisa de Mercado",
+        "--sem-xlsx",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
+    let res2 = busca::main(&d.amb, &argv, None).unwrap().unwrap();
+    assert_eq!(
+        res2.regs
+            .iter()
+            .map(|r| r.numero.as_str())
+            .collect::<Vec<_>>(),
+        ["31.700/2026"]
+    );
+}

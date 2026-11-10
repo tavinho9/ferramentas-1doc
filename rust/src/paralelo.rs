@@ -74,3 +74,54 @@ pub fn mais_comuns(itens: impl IntoIterator<Item = String>) -> Vec<(String, usiz
     v.sort_by_key(|x| std::cmp::Reverse(x.1));
     v
 }
+
+/// `ThreadPoolExecutor` + `as_completed`: os resultados são entregues na
+/// ordem em que ficam prontos, com o índice do item. O primeiro erro
+/// interrompe a entrega e as threads param de pegar itens novos.
+pub fn conforme_terminam<T, R, F, G>(
+    itens: &[T],
+    workers: usize,
+    f: F,
+    mut ao_receber: G,
+) -> Res<()>
+where
+    T: Sync,
+    R: Send,
+    F: Fn(&T) -> Res<R> + Sync,
+    G: FnMut(usize, R) -> Res<()>,
+{
+    if itens.is_empty() {
+        return Ok(());
+    }
+    let proximo = AtomicUsize::new(0);
+    let parar = AtomicBool::new(false);
+    std::thread::scope(|s| {
+        let (tx, rx) = mpsc::channel::<(usize, Res<R>)>();
+        for _ in 0..workers.max(1).min(itens.len()) {
+            let tx = tx.clone();
+            let (proximo, parar, f) = (&proximo, &parar, &f);
+            s.spawn(move || {
+                while !parar.load(Ordering::SeqCst) {
+                    let i = proximo.fetch_add(1, Ordering::SeqCst);
+                    if i >= itens.len() {
+                        break;
+                    }
+                    if tx.send((i, f(&itens[i]))).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+        drop(tx);
+        let resultado = (|| {
+            for (i, r) in rx.iter() {
+                ao_receber(i, r?)?;
+            }
+            Ok(())
+        })();
+        if resultado.is_err() {
+            parar.store(true, Ordering::SeqCst);
+        }
+        resultado
+    })
+}

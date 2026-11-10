@@ -14,6 +14,8 @@ pub mod saida;
 
 pub mod ambiente;
 pub mod arquivos;
+pub mod busca;
+pub mod busca_argv;
 pub mod caminhos;
 pub mod cancelar;
 pub mod cli;

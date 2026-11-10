@@ -216,3 +216,277 @@ fn descricao_do_objeto() {
     );
     assert_eq!(pdd::ler_descricao_objeto("<div id='outro'>x</div>"), "");
 }
+
+mod busca_argv_testes {
+    use chrono::NaiveDate;
+    use ferramentas1doc::busca_argv::{self as ba, Formulario};
+
+    fn agora() -> chrono::NaiveDateTime {
+        NaiveDate::from_ymd_opt(2026, 11, 6)
+            .unwrap()
+            .and_hms_opt(9, 5, 0)
+            .unwrap()
+    }
+
+    fn form(caixas: &[&str]) -> Formulario {
+        Formulario {
+            caixas: caixas.iter().map(|s| s.to_string()).collect(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn montar_argv_completo() {
+        let mut f = form(&["entrada", "arquivo"])
+            .com("numeros", "31.632/2026 5712/2025")
+            .com("etapa", "Pesquisa de Mercado; Consulta Orçamentária")
+            .com("fase", "Abertura")
+            .com("antes_de", "Pesquisa de Mercado")
+            .com("emissao_de", "01/10/2026")
+            .com("dias_etapa_min", "15")
+            .com("objeto", "medicamento")
+            .com(
+                "extras",
+                r#"--setor-etapa CPPFI --numeros-arquivo "C:\Users\joao\Área de Trabalho\x.xlsx""#,
+            )
+            .marcar("refazer");
+        f.prioridade = vec!["Urgente".into(), "Alta".into()];
+        let argv =
+            ba::montar_argv(&f, Some(std::path::Path::new("C:\\saida")), agora(), false).unwrap();
+        assert_eq!(
+            argv[..4],
+            [
+                "--caixas",
+                "entrada,arquivo",
+                "--numeros",
+                "31.632/2026,5712/2025"
+            ]
+        );
+        assert_eq!(argv.iter().filter(|a| *a == "--etapa").count(), 2);
+        let i = argv.iter().position(|a| a == "--prioridade").unwrap();
+        assert_eq!(argv[i..i + 2], ["--prioridade", "Urgente,Alta"]);
+        assert_eq!(
+            argv[argv.len() - 2..],
+            [
+                "--numeros-arquivo",
+                r"C:\Users\joao\Área de Trabalho\x.xlsx"
+            ]
+        );
+        assert_eq!(ba::validar(&argv), None);
+    }
+
+    #[test]
+    fn montar_argv_todas_as_caixas_e_todas_prioridades() {
+        let mut f = form(&ba::CAIXAS);
+        f.prioridade = ba::PRIORIDADES.iter().map(|s| s.to_string()).collect();
+        assert_eq!(
+            ba::montar_argv(&f, None, agora(), false).unwrap(),
+            ["--caixas", "todas"]
+        );
+    }
+
+    #[test]
+    fn busca_aceita_os_formatos_da_instrucao_de_datas() {
+        for exemplo in ba::EXEMPLOS_DATA {
+            let argv: Vec<String> = ["--emissao-de", exemplo, "--mudanca-ate", exemplo]
+                .iter()
+                .map(|s| s.to_string())
+                .collect();
+            assert_eq!(ba::validar(&argv), None, "{exemplo}");
+        }
+    }
+
+    #[test]
+    fn instrucao_de_datas_da_busca() {
+        for formato in ["DD/MM/AAAA", "AAAA-MM-DD", "hoje", "ontem", "-N"] {
+            assert!(ba::DICA_DATAS.contains(formato));
+        }
+        // a instrução pede o ano completo: sem ele, a busca recusa
+        assert!(
+            ba::validar(&["--emissao-de".into(), "05/11".into()])
+                .unwrap()
+                .contains("data inválida")
+        );
+    }
+
+    fn v(x: &[&str]) -> Vec<String> {
+        x.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn ordenar_etapas() {
+        let base = v(&ba::ETAPAS_BASE);
+        assert_eq!(ba::ordenar_etapas(&[]), base);
+        let elaboracao = v(&["Elaboração do DFD", "Elaboração do ETP", "Etapa Final"]);
+        let mut abertura_lida: Vec<String> = base
+            .iter()
+            .map(|n| {
+                if n == "Aprovação do COMPAC" {
+                    n.to_uppercase()
+                } else {
+                    n.clone()
+                }
+            })
+            .collect();
+        abertura_lida[0] = "Validacao de  requisicao".into(); // grafia diferente, mesma etapa
+        let etapas = ba::ordenar_etapas(&[elaboracao, abertura_lida]);
+        let mut esperado = vec!["Validacao de  requisicao".to_string()];
+        esperado.extend(base[1..5].iter().cloned());
+        esperado.extend(v(&[
+            "APROVAÇÃO DO COMPAC",
+            "Etapa Final",
+            "Elaboração do DFD",
+            "Elaboração do ETP",
+        ]));
+        assert_eq!(etapas, esperado);
+    }
+
+    #[test]
+    fn etapas_conhecidas_do_cache() {
+        let tmp = tempfile::tempdir().unwrap();
+        let arq = tmp.path().join("1doc_cache.json");
+        assert_eq!(ba::etapas_conhecidas(&arq), v(&ba::ETAPAS_BASE)); // sem cache
+        std::fs::write(&arq, "{ quebrado").unwrap();
+        assert_eq!(ba::etapas_conhecidas(&arq), v(&ba::ETAPAS_BASE));
+        let elab = serde_json::json!(["Elaboração do DFD", "Elaboração do ETP", "Etapa Final"]);
+        let mut det = serde_json::json!({"3|1/2026": {"etapas_quadro": elab}, "3|2/2026": {"etapas_quadro": elab},
+                   "3|3/2026": {"etapas_quadro": []}, "3|4/2026": {"numero": "sem quadro"}});
+        std::fs::write(
+            &arq,
+            serde_json::json!({"versao": "1.1", "det": det}).to_string(),
+        )
+        .unwrap();
+        let e = ba::etapas_conhecidas(&arq);
+        assert_eq!(e[e.len() - 2..], ["Elaboração do DFD", "Elaboração do ETP"]);
+        det["3|5/2026"] = serde_json::json!({"etapas_quadro": ["Análise Jurídica", "Etapa Final"]}); // uma busca nova
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(
+            &arq,
+            serde_json::json!({"versao": "1.1", "det": det}).to_string(),
+        )
+        .unwrap();
+        assert_eq!(
+            ba::etapas_conhecidas(&arq).last().unwrap(),
+            "Análise Jurídica"
+        );
+    }
+
+    #[test]
+    fn juntar_etapa() {
+        for (antes, escolhida, varios, esperado) in [
+            ("", "Pesquisa de Mercado", true, "Pesquisa de Mercado"),
+            (
+                "Pesquisa",
+                "Pesquisa de Mercado",
+                true,
+                "Pesquisa de Mercado",
+            ), // substitui
+            (
+                "Pesquisa de Mercado;",
+                "Consulta Orçamentária",
+                true,
+                "Pesquisa de Mercado; Consulta Orçamentária",
+            ),
+            (
+                "Pesquisa de Mercado; ",
+                "pesquisa de mercado",
+                true,
+                "Pesquisa de Mercado",
+            ), // não repete
+            (
+                "Pesquisa de Mercado;",
+                "Consulta Orçamentária",
+                false,
+                "Consulta Orçamentária",
+            ), // campo de uma só
+        ] {
+            assert_eq!(ba::juntar_etapa(antes, escolhida, varios), esperado);
+        }
+    }
+
+    #[test]
+    fn campos_de_etapa_viram_opcoes_da_busca() {
+        for campo in ba::CAMPOS_ETAPA {
+            assert!(
+                ba::TEXTOS.iter().any(|(c, _)| *c == campo)
+                    || ba::TEXTOS_MULTIPLOS.iter().any(|(c, _)| *c == campo)
+            );
+        }
+        let f = form(&["entrada"])
+            .com("etapa", "Pesquisa de Mercado; Consulta Orçamentária")
+            .com("antes_de", "Pesquisa de Mercado");
+        let argv = ba::montar_argv(&f, None, agora(), false).unwrap();
+        assert_eq!(
+            argv[2..],
+            [
+                "--antes-de",
+                "Pesquisa de Mercado",
+                "--etapa",
+                "Pesquisa de Mercado",
+                "--etapa",
+                "Consulta Orçamentária"
+            ]
+        );
+    }
+
+    #[test]
+    fn montar_argv_erros() {
+        assert!(
+            ba::montar_argv(&form(&[]), None, agora(), false)
+                .unwrap_err()
+                .0
+                .contains("caixa")
+        );
+        assert!(
+            ba::montar_argv(
+                &form(&["entrada"]).com("dias_etapa_min", "dez"),
+                None,
+                agora(),
+                false
+            )
+            .unwrap_err()
+            .0
+            .contains("inteiro")
+        );
+        assert!(
+            ba::validar(&v(&["--emissao-de", "31/31/2026"]))
+                .unwrap()
+                .contains("data inválida")
+        );
+        assert!(
+            ba::validar(&v(&["--nao-existe"]))
+                .unwrap()
+                .contains("--nao-existe")
+        );
+    }
+
+    #[test]
+    fn abreviacoes_e_negativos_como_no_argparse() {
+        // abreviação ambígua é recusada; a única vale, como no argparse
+        assert!(
+            ba::validar(&v(&["--sem-mov-m", "5"]))
+                .unwrap()
+                .contains("--sem-mov-m")
+        );
+        assert_eq!(
+            ba::validar(&v(&[
+                "--etapa-ex",
+                "--emissao-de",
+                "-30",
+                "--dias-etapa-min",
+                "3"
+            ])),
+            None
+        );
+        assert!(
+            ba::validar(&v(&["--fase", "xyz"]))
+                .unwrap()
+                .contains("fase: Elaboração ou Abertura")
+        );
+        assert!(
+            ba::validar(&v(&["--dias-etapa-min", "dez"]))
+                .unwrap()
+                .contains("--dias-etapa-min")
+        );
+    }
+}

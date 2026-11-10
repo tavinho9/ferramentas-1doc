@@ -75,6 +75,7 @@ pub fn main(args: Vec<String>) -> i32 {
     let resto = &args[1..];
     let r = match ferramenta.replace('_', "-").as_str() {
         "processos-do-dia" => processos_do_dia_cli(&amb, resto),
+        "busca" => crate::busca::main(&amb, resto, None).map(|_| ()),
         "-h" | "--help" | "ajuda" => {
             println!("{AJUDA}");
             Ok(())
