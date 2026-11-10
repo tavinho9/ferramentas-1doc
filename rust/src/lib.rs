@@ -21,6 +21,8 @@ pub mod datas;
 pub mod erro;
 
 pub mod http;
+pub mod navegador;
+pub mod sessao;
 
 pub use ambiente::Ambiente;
 pub use erro::{Erro, Res};
