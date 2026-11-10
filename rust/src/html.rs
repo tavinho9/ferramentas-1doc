@@ -138,3 +138,56 @@ pub fn textos_diretos<'a>(el: ElementRef<'a>) -> Vec<&'a str> {
 pub fn html_de(el: ElementRef<'_>) -> String {
     el.html()
 }
+
+/// Primeiro ancestral (sem contar o próprio elemento) que satisfaz `pred`
+/// (`find_parent`).
+pub fn ancestral<'a>(
+    el: ElementRef<'a>,
+    pred: impl Fn(ElementRef<'a>) -> bool,
+) -> Option<ElementRef<'a>> {
+    el.ancestors()
+        .filter_map(ElementRef::wrap)
+        .find(|e| pred(*e))
+}
+
+pub fn ancestral_tag<'a>(el: ElementRef<'a>, tag: &str) -> Option<ElementRef<'a>> {
+    ancestral(el, |e| e.value().name() == tag)
+}
+
+const BLOCOS: [&str; 10] = ["p", "div", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6"];
+
+fn quebras<'a>(no: NodeRef<'a, Node>, blocos: bool, partes: &mut Vec<&'a str>) {
+    for filho in no.children() {
+        match filho.value() {
+            Node::Text(t) => partes.push(t),
+            Node::Element(e) => {
+                let nome = e.name();
+                if nome == "br" {
+                    partes.push("\n");
+                    continue;
+                }
+                if conteiner_ignorado(nome) {
+                    continue;
+                }
+                quebras(filho, blocos, partes);
+                if blocos && BLOCOS.contains(&nome) {
+                    partes.push("\n");
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// `get_text()` com cada `<br>` trocado por quebra de linha e, com `blocos`,
+/// uma quebra no fim de cada bloco (p, div, li, tr, h1–h6).
+pub fn texto_com_quebras(el: ElementRef<'_>, blocos: bool) -> String {
+    let mut partes = Vec::new();
+    quebras(*el, blocos, &mut partes);
+    partes.concat()
+}
+
+/// `get_text(strip=True)` não vazio.
+pub fn tem_texto(el: ElementRef<'_>) -> bool {
+    el.text().any(|t| !t.trim().is_empty())
+}

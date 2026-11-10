@@ -84,3 +84,48 @@ pub fn compr(texto: &str) -> usize {
 pub fn ate_ultimo_espaco(texto: &str) -> &str {
     texto.rsplit_once(' ').map(|(a, _)| a).unwrap_or(texto)
 }
+
+/// `s[inicio:inicio + n]` com `inicio` em bytes (vindo de uma regex) e `n`
+/// em caracteres, como no fatiamento de str do Python.
+pub fn fatia(s: &str, inicio: usize, n: usize) -> &str {
+    let resto = &s[inicio..];
+    let fim = resto
+        .char_indices()
+        .nth(n)
+        .map(|(i, _)| i)
+        .unwrap_or(resto.len());
+    &resto[..fim]
+}
+
+/// `str.splitlines()`.
+pub fn linhas(s: &str) -> Vec<&str> {
+    let mut v = Vec::new();
+    let mut ini = 0;
+    let mut it = s.char_indices().peekable();
+    while let Some((i, c)) = it.next() {
+        if matches!(
+            c,
+            '\n' | '\r'
+                | '\u{b}'
+                | '\u{c}'
+                | '\u{1c}'
+                | '\u{1d}'
+                | '\u{1e}'
+                | '\u{85}'
+                | '\u{2028}'
+                | '\u{2029}'
+        ) {
+            v.push(&s[ini..i]);
+            let mut fim = i + c.len_utf8();
+            if c == '\r' && it.peek().is_some_and(|(_, d)| *d == '\n') {
+                it.next();
+                fim += 1;
+            }
+            ini = fim;
+        }
+    }
+    if ini < s.len() {
+        v.push(&s[ini..]);
+    }
+    v
+}

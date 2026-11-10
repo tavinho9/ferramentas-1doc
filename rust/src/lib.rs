@@ -16,12 +16,16 @@ pub mod ambiente;
 pub mod arquivos;
 pub mod caminhos;
 pub mod cancelar;
+pub mod cli;
 pub mod config;
 pub mod datas;
 pub mod erro;
 
 pub mod http;
 pub mod navegador;
+pub mod paralelo;
+pub mod planilha;
+pub mod processos_do_dia;
 pub mod sessao;
 
 pub use ambiente::Ambiente;

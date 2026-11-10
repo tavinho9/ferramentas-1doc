@@ -142,3 +142,77 @@ fn terminal_reescreve_linha_com_retorno_de_carro() {
         ]
     );
 }
+
+#[test]
+fn etapa_dentro_24h() {
+    use ferramentas1doc::processos_do_dia as pdd;
+    for (txt, dentro) in [
+        ("Esta aqui 1 hora", true),
+        ("Aqui há alguns segundos", true),
+        ("Está aqui 45 minutos", true),
+        ("Está aqui 3 dias", false),
+        ("Está aqui 1 semana", false),
+        ("", false),
+        ("???", false),
+    ] {
+        assert_eq!(pdd::etapa_dentro_24h(txt), dentro, "{txt}");
+    }
+}
+
+#[test]
+fn kanban_ignora_copia_do_modelo_de_despacho() {
+    use ferramentas1doc::processos_do_dia as pdd;
+    let html = concat!(
+        r#"<div id="emissao_principal"><div class="kanban_estagios" data-current="true">"#,
+        r#"<div class="kanban_titulo"><p>Validação de Requisição</p></div>"#,
+        r#"<div class="kanban_itens"><p class="kanban_item">Esta aqui 3 dias</p></div></div></div>"#,
+        r#"<div id="parent_wa"><div class="kanban_estagios" data-current="true">"#,
+        r#"<div class="kanban_titulo"><p>Validação de Requisição</p></div>"#,
+        r#"<div class="kanban_itens"><p class="kanban_item">Aqui há alguns segundos</p></div></div></div>"#
+    );
+    assert_eq!(
+        pdd::ler_etapa_atual(html),
+        Some(("Validação de Requisição".into(), "Esta aqui 3 dias".into()))
+    );
+}
+
+#[test]
+fn rotulo_etapa() {
+    use ferramentas1doc::processos_do_dia as pdd;
+    assert_eq!(
+        pdd::rotulo_etapa("Etapa Final", "Abertura de Procedimento Licitatório", false),
+        "Etapa Final — Abertura"
+    );
+    assert_eq!(
+        pdd::rotulo_etapa("", "Elaboração de Documentação Preparatória", true),
+        "Elaboração"
+    );
+    assert_eq!(
+        pdd::rotulo_etapa("Etapa Final", "Outra fase", false),
+        "Elaboração"
+    );
+}
+
+#[test]
+fn descricao_do_objeto() {
+    use ferramentas1doc::processos_do_dia as pdd;
+    let campo =
+        |dentro: &str| format!(r#"<div id="campo_adicional_descricao_objeto">{dentro}</div>"#);
+    assert_eq!(
+        pdd::ler_descricao_objeto(&campo(
+            r#"<div class="cp"><span data-valor="Compra de &lt;br&gt;papel">Objeto<span>*</span>:</span><small>x</small></div>"#
+        )),
+        "Compra de\npapel"
+    );
+    assert_eq!(
+        pdd::ler_descricao_objeto(&campo(
+            r#"<div class="cp"><span>Objeto*:</span><small>linha 1<br>linha   2</small></div>"#
+        )),
+        "linha 1\nlinha 2"
+    );
+    assert_eq!(
+        pdd::ler_descricao_objeto(&campo("<p>Objeto: um</p><p>dois</p>")),
+        "um\ndois"
+    );
+    assert_eq!(pdd::ler_descricao_objeto("<div id='outro'>x</div>"), "");
+}

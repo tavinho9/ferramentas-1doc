@@ -425,3 +425,28 @@ pub fn cred() -> Credenciais {
         salvo_em: String::new(),
     }
 }
+
+/// Valores de uma aba (None = a ativa) como texto; célula vazia = "".
+pub fn valores(caminho: &std::path::Path, aba: Option<&str>) -> Vec<Vec<String>> {
+    let wb = umya_spreadsheet::reader::xlsx::read(caminho).unwrap();
+    let ws = match aba {
+        Some(n) => wb.sheet_by_name(n).unwrap(),
+        None => wb.active_sheet(),
+    };
+    let (cols, linhas) = ws.highest_column_and_row();
+    (1..=linhas)
+        .map(|r| (1..=cols).map(|c| ws.value((c, r))).collect())
+        .collect()
+}
+
+/// Link da célula (coluna, linha), se houver.
+pub fn link(caminho: &std::path::Path, aba: Option<&str>, col: u32, linha: u32) -> Option<String> {
+    let wb = umya_spreadsheet::reader::xlsx::read(caminho).unwrap();
+    let ws = match aba {
+        Some(n) => wb.sheet_by_name(n).unwrap(),
+        None => wb.active_sheet(),
+    };
+    ws.cell((col, linha))
+        .and_then(|c| c.hyperlink())
+        .map(|h| h.url().to_string())
+}
