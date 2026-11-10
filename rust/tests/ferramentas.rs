@@ -334,3 +334,71 @@ mod faltantes_testes {
         );
     }
 }
+
+mod verificar_testes {
+    use super::comum;
+    use ferramentas1doc::verificar_planilha as vp;
+
+    fn op() -> vp::Opcoes {
+        vp::Opcoes {
+            pausa: 0.0,
+            sem_navegador: true,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn verificar_planilha() {
+        let fake = comum::Fake1Doc::novo();
+        let d = comum::dados(&fake.base);
+        let pl = comum::planilha(
+            &d.pasta_dados().join("acomp.xlsx"),
+            &["31.632/2026", "31.700/2026"],
+        );
+        let destino = vp::executar(&d.amb, &pl, Some("Acompanhamento"), &comum::cred(), op())
+            .unwrap()
+            .unwrap();
+        let linhas = comum::valores(&destino, None);
+        // só P1 chegou à Pesquisa de Mercado; colunas novas no fim
+        assert_eq!(
+            linhas[1..]
+                .iter()
+                .map(|l| l[0].as_str())
+                .collect::<Vec<_>>(),
+            ["31.632/2026"]
+        );
+        assert_eq!(
+            linhas[0][5..],
+            [
+                "Etapa atual (1Doc)",
+                "Processo pai",
+                "Processo filho",
+                "Objeto (abertura)",
+                "Observação"
+            ]
+        );
+        assert_eq!(linhas[1][5], "Pesquisa de Mercado");
+        assert_eq!(
+            linhas[1][8],
+            "Aquisição de medicamentos para a rede municipal de saúde"
+        );
+        assert_eq!(
+            comum::link(&destino, None, 1, 2).as_deref(),
+            Some(format!("{}/?pg=doc/ver&hash=AAAA1111BBBB2222CCCC&itd=3", fake.base).as_str())
+        );
+        let cache: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(d.pasta_dados().join("hash_cache_1doc.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(cache["31.632/2026"], "AAAA1111BBBB2222CCCC"); // localizado por HTTP e guardado
+    }
+
+    #[test]
+    fn aba_inexistente() {
+        let fake = comum::Fake1Doc::novo();
+        let d = comum::dados(&fake.base);
+        let pl = comum::planilha(&d.pasta_dados().join("acomp.xlsx"), &["31.632/2026"]);
+        let e = vp::executar(&d.amb, &pl, Some("Outra"), &comum::cred(), op()).unwrap_err();
+        assert!(e.to_string().contains("Aba 'Outra' não existe"), "{e}");
+    }
+}

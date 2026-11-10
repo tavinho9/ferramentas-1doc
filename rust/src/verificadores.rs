@@ -100,10 +100,17 @@ impl Item {
     }
 }
 
+/// Valor da célula como o openpyxl o lê sem `data_only`: fórmula vira o
+/// texto da fórmula ("=C3*2"), não o resultado guardado.
+pub fn valor_celula(c: &umya_spreadsheet::Cell) -> String {
+    if c.is_formula() {
+        return format!("={}", c.formula());
+    }
+    c.value().to_string()
+}
+
 fn valor(ws: &Worksheet, c: u32, r: u32) -> String {
-    ws.cell((c, r))
-        .map(|x| x.value().to_string())
-        .unwrap_or_default()
+    ws.cell((c, r)).map(valor_celula).unwrap_or_default()
 }
 
 /// Apaga as células só de formatação além da última linha e da última
@@ -113,7 +120,7 @@ pub fn limpar_excesso(ws: &mut Worksheet) -> (u32, u32) {
     let com_valor: Vec<(u32, u32)> = ws
         .cells()
         .iter()
-        .filter(|c| !c.value().is_empty())
+        .filter(|c| !valor_celula(c).is_empty())
         .map(|c| (c.coordinate().row_num(), c.coordinate().col_num()))
         .collect();
     let ult_lin = com_valor.iter().map(|x| x.0).max().unwrap_or(1);
@@ -242,7 +249,7 @@ pub fn ler_planilha(caminho: &Path, aba: Option<&str>) -> Res<Planilha> {
     let (mut itens, mut ignoradas) = (Vec::new(), Vec::new());
     for r in lin_cab + 1..=ult_lin {
         let cel = ws.cell((col, r));
-        let v = cel.map(|c| c.value().to_string()).unwrap_or_default();
+        let v = cel.map(valor_celula).unwrap_or_default();
         let Some((numero, digitos, ano)) = ler_numero(&v) else {
             if !v.is_empty() {
                 ignoradas.push((r, v));

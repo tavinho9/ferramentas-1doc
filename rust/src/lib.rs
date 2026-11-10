@@ -9,6 +9,7 @@ pub const NOME_APP: &str = "Ferramentas 1Doc";
 
 pub mod texto;
 pub mod verificadores;
+pub mod verificar_planilha;
 #[macro_use]
 pub mod html;
 pub mod saida;

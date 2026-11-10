@@ -83,6 +83,41 @@ struct ArgsFaltantes {
     ate: Option<String>,
 }
 
+#[derive(clap::Parser)]
+#[command(
+    name = "verificar-planilha",
+    about = "Verifica se os processos de uma planilha já chegaram à Pesquisa de Mercado no 1Doc"
+)]
+struct ArgsVerificar {
+    planilha: Option<String>,
+    /// nome da aba (padrão: a ativa)
+    #[arg(long)]
+    aba: Option<String>,
+    /// salva cada página de processo baixada nesta pasta (diagnóstico)
+    #[arg(long, value_name = "PASTA")]
+    html: Option<String>,
+}
+
+fn verificar_cli(amb: &Ambiente, args: &[String]) -> Res<()> {
+    let Some(a) = analisar::<ArgsVerificar>("verificar-planilha", args)? else {
+        return Ok(());
+    };
+    let caminho = a.planilha.unwrap_or_else(escolher_arquivo);
+    let cred = sessao::obter_sessao(amb, false, None, None, None)?;
+    let op = crate::verificar_planilha::Opcoes {
+        pasta_html: a.html.map(Into::into),
+        ..Default::default()
+    };
+    crate::verificar_planilha::executar(
+        amb,
+        std::path::Path::new(&caminho),
+        a.aba.as_deref(),
+        &cred,
+        op,
+    )?;
+    Ok(())
+}
+
 /// Planilha pedida no terminal (sem janela de seleção na linha de comando).
 fn escolher_arquivo() -> String {
     perguntar("Caminho da planilha .xlsx: ")
@@ -148,6 +183,7 @@ pub fn main(args: Vec<String>) -> i32 {
         "processos-do-dia" => processos_do_dia_cli(&amb, resto),
         "busca" => crate::busca::main(&amb, resto, None).map(|_| ()),
         "faltantes" => faltantes_cli(&amb, resto),
+        "verificar-planilha" | "verificar" => verificar_cli(&amb, resto),
         "-h" | "--help" | "ajuda" => {
             println!("{AJUDA}");
             Ok(())

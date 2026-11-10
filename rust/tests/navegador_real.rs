@@ -234,3 +234,33 @@ fn navegador_invisivel_com_cookies_da_sessao() {
     assert!(url.contains("pg=painel/listar"), "{url}");
     nav.fechar();
 }
+
+#[test]
+fn localizar_pelo_navegador_invisivel() {
+    // Último recurso dos verificadores: o formulário do painel, preenchido no navegador.
+    use ferramentas1doc::verificadores::{self as v, Item};
+    if !habilitado() {
+        return;
+    }
+    let srv = servidor();
+    let d = comum::dados(&srv.base);
+    let nav = NavegadorSobDemanda::novo(&cred_ok(), Some(&qual()));
+    let item = |dig: &str| Item {
+        digitos: dig.into(),
+        ano: "2026".into(),
+        ..Default::default()
+    };
+    let achou = nav
+        .com(&d.amb, |drv| {
+            v::localizar_navegador(&d.amb, drv, &item("31632"))
+        })
+        .expect("navegador não abriu");
+    assert_eq!(achou, ["AAAA1111BBBB2222CCCC"]);
+    let nada = nav
+        .com(&d.amb, |drv| {
+            v::localizar_navegador(&d.amb, drv, &item("99999"))
+        })
+        .unwrap();
+    assert!(nada.is_empty(), "{nada:?}");
+    nav.fechar();
+}
