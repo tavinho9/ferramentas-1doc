@@ -490,3 +490,72 @@ mod busca_argv_testes {
         );
     }
 }
+
+mod faltantes_funcoes {
+    use super::{d, hoje};
+    use ferramentas1doc::faltantes;
+    use ferramentas1doc::verificadores::Item;
+
+    fn itens(anos: &[&str]) -> Vec<Item> {
+        anos.iter()
+            .map(|a| Item {
+                ano: a.to_string(),
+                ..Default::default()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn resolver_periodo() {
+        let it = itens(&["2026", "2024"]);
+        assert_eq!(
+            faltantes::resolver_periodo(None, None, &it, hoje()).unwrap(),
+            (d(2024, 1, 1), hoje())
+        );
+        assert_eq!(
+            faltantes::resolver_periodo(None, None, &[], hoje()).unwrap(),
+            (d(2026, 1, 1), hoje())
+        );
+        // fim no futuro: hoje
+        assert_eq!(
+            faltantes::resolver_periodo(Some(d(2025, 6, 1)), Some(d(2027, 1, 1)), &it, hoje())
+                .unwrap(),
+            (d(2025, 6, 1), hoje())
+        );
+        let e = faltantes::resolver_periodo(None, Some(d(2023, 12, 31)), &it, hoje()).unwrap_err();
+        assert!(e.to_string().contains("Período vazio"));
+    }
+
+    #[test]
+    fn data_de_emissao_na_listagem() {
+        let html = concat!(
+            r#"<table><tr><td><a class="link_emissao_a" href="./?pg=doc/ver&hash=AAAA1111BBBB2222CCCC">"#,
+            r#"Proc. Administrativo 31.632/2026 <small class="data">05/11/2026 09:15</small></a></td></tr>"#,
+            r#"<tr><td><a class="link_emissao_a" href="./?pg=doc/ver&hash=DDDD3333EEEE4444FFFF">"#,
+            r#"Proc. Administrativo 31.700/2026</a></td></tr></table>"#
+        );
+        let e: Vec<_> = faltantes::linhas_listagem(html)
+            .into_iter()
+            .map(|l| l.emissao)
+            .collect();
+        assert_eq!(e, [Some(d(2026, 11, 5)), None]);
+    }
+
+    #[test]
+    fn cancelamento() {
+        assert_eq!(
+            faltantes::posicao_cancelamento("Solicito o cancelamento do processo"),
+            Some(11)
+        );
+        assert!(!faltantes::menciona_cancelamento(
+            "Não há cancelamento previsto"
+        ));
+        assert!(!faltantes::menciona_cancelamento("Segue sem cancelamento."));
+        assert!(faltantes::menciona_cancelamento(
+            "Processo CANCELADO por desistência"
+        ));
+        let t = "a ".repeat(200) + "cancelar " + &"b ".repeat(200);
+        let tr = faltantes::trecho_em_volta(&t, faltantes::posicao_cancelamento(&t).unwrap(), 150);
+        assert!(tr.starts_with("… ") && tr.ends_with(" …") && tr.contains("cancelar"));
+    }
+}

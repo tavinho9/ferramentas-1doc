@@ -173,3 +173,164 @@ fn busca() {
         ["31.700/2026"]
     );
 }
+
+mod faltantes_testes {
+    use super::comum;
+    use chrono::Duration;
+    use ferramentas1doc::{Erro, faltantes};
+    use std::collections::HashSet;
+
+    fn op() -> faltantes::Opcoes {
+        faltantes::Opcoes {
+            pausa: 0.0,
+            sem_navegador: true,
+            ..Default::default()
+        }
+    }
+
+    fn br(d: chrono::NaiveDate) -> String {
+        d.format("%d/%m/%Y").to_string()
+    }
+
+    fn intervalos(fake: &comum::Fake1Doc) -> HashSet<String> {
+        fake.intervalos().into_iter().flatten().collect()
+    }
+
+    #[test]
+    fn faltantes() {
+        let fake = comum::Fake1Doc::novo();
+        let d = comum::dados(&fake.base);
+        let pl = comum::planilha(&d.pasta_dados().join("acomp.xlsx"), &["31.632/2026"]);
+        let destino = faltantes::executar(&d.amb, &pl, None, &comum::cred(), op())
+            .unwrap()
+            .unwrap();
+        assert_eq!(destino.parent().unwrap(), d.pasta_saida());
+        let linhas = comum::valores(&destino, Some("Faltantes"));
+        // P2 está antes da Pesquisa de Mercado e fora da planilha; P1 está na planilha
+        assert_eq!(
+            linhas[1..]
+                .iter()
+                .map(|l| l[0].as_str())
+                .collect::<Vec<_>>(),
+            ["31.700/2026"]
+        );
+        assert_eq!(linhas[1][2], "Reforma da Escola Municipal Exemplo");
+        assert!(d.pasta_dados().join("hash_cache_1doc.json").is_file());
+        // período padrão: de 1º/jan do ano mais antigo da planilha até hoje
+        assert_eq!(
+            intervalos(&fake),
+            HashSet::from([format!("01/01/2026 - {}", br(comum::hoje()))])
+        );
+    }
+
+    #[test]
+    fn faltantes_periodo_escolhido() {
+        let fake = comum::Fake1Doc::novo();
+        let d = comum::dados(&fake.base);
+        let pl = comum::planilha(&d.pasta_dados().join("acomp.xlsx"), &["31.632/2026"]);
+        let hoje = comum::hoje();
+        let o = faltantes::Opcoes {
+            de: Some(hoje - Duration::days(10)),
+            ate: Some(hoje + Duration::days(5)),
+            ..op()
+        }; // fim no futuro vira hoje
+        let destino = faltantes::executar(&d.amb, &pl, None, &comum::cred(), o)
+            .unwrap()
+            .unwrap();
+        let linhas = comum::valores(&destino, Some("Faltantes"));
+        assert_eq!(
+            linhas[1..]
+                .iter()
+                .map(|l| l[0].as_str())
+                .collect::<Vec<_>>(),
+            ["31.700/2026"]
+        );
+        assert_eq!(
+            intervalos(&fake),
+            HashSet::from([format!("{} - {}", br(hoje - Duration::days(10)), br(hoje))])
+        );
+    }
+
+    #[test]
+    fn faltantes_periodo_sem_processos() {
+        // Os dois processos foram emitidos hoje. Com o período terminando
+        // ontem nenhum entra, mesmo com o servidor ignorando o intervalo.
+        let fake = comum::Fake1Doc::novo();
+        let d = comum::dados(&fake.base);
+        let pl = comum::planilha(&d.pasta_dados().join("acomp.xlsx"), &["31.632/2026"]);
+        let ontem = comum::hoje() - Duration::days(1);
+        let o = faltantes::Opcoes {
+            de: Some(ontem - Duration::days(30)),
+            ate: Some(ontem),
+            ..op()
+        };
+        assert_eq!(
+            faltantes::executar(&d.amb, &pl, None, &comum::cred(), o).unwrap(),
+            None
+        );
+        assert_eq!(
+            intervalos(&fake),
+            HashSet::from([format!(
+                "{} - {}",
+                br(ontem - Duration::days(30)),
+                br(ontem)
+            )])
+        );
+        assert!(!fake.chaves().contains(&("GET".into(), "doc/ver".into()))); // nenhum processo aberto
+        assert!(
+            d.saida_texto()
+                .contains("Nenhum Proc. Administrativo emitido de")
+        );
+        assert_eq!(std::fs::read_dir(d.pasta_saida()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn faltantes_todos_ja_na_planilha() {
+        let fake = comum::Fake1Doc::novo();
+        let d = comum::dados(&fake.base);
+        let pl = comum::planilha(
+            &d.pasta_dados().join("acomp.xlsx"),
+            &["31.632/2026", "31.700/2026"],
+        );
+        assert_eq!(
+            faltantes::executar(&d.amb, &pl, None, &comum::cred(), op()).unwrap(),
+            None
+        );
+        assert!(d.saida_texto().contains("já estão na planilha"));
+    }
+
+    #[test]
+    fn faltantes_periodo_vazio() {
+        // Só a data final, antes do início padrão (1º/jan de 2026, pela planilha).
+        let fake = comum::Fake1Doc::novo();
+        let d = comum::dados(&fake.base);
+        let pl = comum::planilha(&d.pasta_dados().join("acomp.xlsx"), &["31.632/2026"]);
+        let o = faltantes::Opcoes {
+            ate: chrono::NaiveDate::from_ymd_opt(2025, 12, 31),
+            ..op()
+        };
+        let e = faltantes::executar(&d.amb, &pl, None, &comum::cred(), o).unwrap_err();
+        assert!(
+            matches!(&e, Erro::Encerrar(m) if m.contains("Período vazio")),
+            "{e:?}"
+        );
+    }
+
+    #[test]
+    fn planilha_inexistente() {
+        let fake = comum::Fake1Doc::novo();
+        let d = comum::dados(&fake.base);
+        let e = faltantes::executar(
+            &d.amb,
+            &d.pasta_dados().join("nao_existe.xlsx"),
+            None,
+            &comum::cred(),
+            op(),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(&e, Erro::Encerrar(m) if m.contains("não encontrado")),
+            "{e:?}"
+        );
+    }
+}

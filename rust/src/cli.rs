@@ -65,6 +65,77 @@ fn processos_do_dia_cli(amb: &Ambiente, args: &[String]) -> Res<()> {
     Ok(())
 }
 
+#[derive(clap::Parser)]
+#[command(
+    name = "faltantes",
+    about = "Processos que estão no 1Doc antes da Pesquisa de Mercado e faltam na planilha de acompanhamento"
+)]
+struct ArgsFaltantes {
+    planilha: Option<String>,
+    /// nome da aba (padrão: a ativa)
+    #[arg(long)]
+    aba: Option<String>,
+    /// só processos emitidos a partir desta data (DD/MM/AAAA, DD/MM/AA, DD/MM, hoje, ontem ou -N); padrão: 1º/jan do ano mais antigo da planilha
+    #[arg(long, value_name = "DATA", allow_hyphen_values = true)]
+    de: Option<String>,
+    /// só processos emitidos até esta data; padrão: hoje
+    #[arg(long, value_name = "DATA", allow_hyphen_values = true)]
+    ate: Option<String>,
+}
+
+/// Planilha pedida no terminal (sem janela de seleção na linha de comando).
+fn escolher_arquivo() -> String {
+    perguntar("Caminho da planilha .xlsx: ")
+        .trim_matches('"')
+        .to_string()
+}
+
+fn analisar<T: clap::Parser>(nome: &str, args: &[String]) -> Res<Option<T>> {
+    let mut v = vec![nome.to_string()];
+    v.extend(args.iter().cloned());
+    match T::try_parse_from(v) {
+        Ok(a) => Ok(Some(a)),
+        Err(e) if matches!(e.kind(), clap::error::ErrorKind::DisplayHelp) => {
+            println!("{e}");
+            Ok(None)
+        }
+        Err(e) => Err(Erro::encerrar(
+            e.to_string()
+                .lines()
+                .next()
+                .unwrap_or("argumentos inválidos")
+                .to_string(),
+        )),
+    }
+}
+
+fn faltantes_cli(amb: &Ambiente, args: &[String]) -> Res<()> {
+    let Some(a) = analisar::<ArgsFaltantes>("faltantes", args)? else {
+        return Ok(());
+    };
+    let (de, ate) = datas::ler_periodo(
+        a.de.as_deref().unwrap_or(""),
+        a.ate.as_deref().unwrap_or(""),
+        datas::hoje(),
+    )
+    .map_err(|e| Erro::encerrar(format!("faltantes: error: {e}")))?;
+    let caminho = a.planilha.unwrap_or_else(escolher_arquivo);
+    let cred = sessao::obter_sessao(amb, false, None, None, None)?;
+    let op = crate::faltantes::Opcoes {
+        de,
+        ate,
+        ..Default::default()
+    };
+    crate::faltantes::executar(
+        amb,
+        std::path::Path::new(&caminho),
+        a.aba.as_deref(),
+        &cred,
+        op,
+    )?;
+    Ok(())
+}
+
 /// Ponto de entrada do programa de linha de comando. Devolve o código de saída.
 pub fn main(args: Vec<String>) -> i32 {
     let amb = Ambiente::padrao(Saida::stdout());
@@ -76,6 +147,7 @@ pub fn main(args: Vec<String>) -> i32 {
     let r = match ferramenta.replace('_', "-").as_str() {
         "processos-do-dia" => processos_do_dia_cli(&amb, resto),
         "busca" => crate::busca::main(&amb, resto, None).map(|_| ()),
+        "faltantes" => faltantes_cli(&amb, resto),
         "-h" | "--help" | "ajuda" => {
             println!("{AJUDA}");
             Ok(())

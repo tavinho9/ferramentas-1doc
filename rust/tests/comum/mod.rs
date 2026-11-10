@@ -450,3 +450,27 @@ pub fn link(caminho: &std::path::Path, aba: Option<&str>, col: u32, linha: u32) 
         .and_then(|c| c.hyperlink())
         .map(|h| h.url().to_string())
 }
+
+/// Planilha de acompanhamento com a aba "Acompanhamento" e os números dados.
+pub fn planilha(caminho: &std::path::Path, numeros: &[&str]) -> std::path::PathBuf {
+    let mut wb = rust_xlsxwriter::Workbook::new();
+    let ws = wb.add_worksheet();
+    ws.set_name("Acompanhamento").unwrap();
+    for (c, t) in ["Nº Processo", "Prioridade", "Objeto", "Etapa", "Secretaria"]
+        .iter()
+        .enumerate()
+    {
+        ws.write_string(0, c as u16, *t).unwrap();
+    }
+    for (i, n) in numeros.iter().enumerate() {
+        let r = (i + 1) as u32;
+        for (c, t) in [*n, "Alta", "objeto", "etapa", "Secretaria de Saúde"]
+            .iter()
+            .enumerate()
+        {
+            ws.write_string(r, c as u16, *t).unwrap();
+        }
+    }
+    wb.save(caminho).unwrap();
+    caminho.to_path_buf()
+}

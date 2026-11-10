@@ -8,6 +8,7 @@ pub const VERSAO: &str = env!("CARGO_PKG_VERSION");
 pub const NOME_APP: &str = "Ferramentas 1Doc";
 
 pub mod texto;
+pub mod verificadores;
 #[macro_use]
 pub mod html;
 pub mod saida;
@@ -22,6 +23,7 @@ pub mod cli;
 pub mod config;
 pub mod datas;
 pub mod erro;
+pub mod faltantes;
 
 pub mod http;
 pub mod navegador;
