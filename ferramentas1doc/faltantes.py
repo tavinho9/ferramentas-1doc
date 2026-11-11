@@ -623,7 +623,8 @@ def sem_etapa_corte(etapas):
 # Por isso os candidatos vêm de onde dá para tirá-los e cada um é aberto
 # e conferido por esse cabeçalho:
 #   1. cache de execuções anteriores
-#   2. links para outros processos dentro dos despachos (.texto_original)
+#   2. menções do 1Doc (data-mention="2", em qualquer lugar da página) e
+#      links para outros processos dentro dos despachos (.texto_original)
 #   3. números NN.NNN/AAAA citados nos despachos, com contexto de processo
 #      ("processo", "abertura", "emitido", "nº"...) e sem contexto de lei,
 #      requisição, contrato etc.
@@ -670,8 +671,20 @@ def ler_id_emissao(html):
     return m.group(1) if m else None
 
 
+# Menção do 1Doc (o documento escolhido na lista ao escrever o despacho):
+#     <a class="mention label mention_2" data-mention="2" href="…&hash=5476D7…&origem=mention…">
+#       Proc. Administrativo 26.831/2026 - …</a>
+# no corpo do despacho e, repetida, na lista de documentos mencionados, que
+# fica fora do .texto_original:
+#     <a class=" pre_visualizar" data-mention="2" href="./?pg=doc/ver&hash=5476D7…&origem=emissao_anexada">
+_RE_TAG_A = re.compile(r"<a\b[^>]*>", re.I)
+_RE_EH_MENCAO = re.compile(r"""\bdata-mention\s*=\s*["']?2\b|\bmention_2\b""", re.I)
+
+
 def citacoes(html, proprio):
-    """Candidatos citados nos despachos: ([hashes de links], [números])."""
+    """Candidatos citados nos despachos: ([hashes de links], [números]).
+    As menções do 1Doc (data-mention="2") vêm primeiro e valem em qualquer
+    lugar da página; depois, os links e os números dos blocos .texto_original."""
     from bs4 import SoupStrainer
     # Função, não texto: no bs4 4.13+ o SoupStrainer(class_="texto_original")
     # compara a string de classe inteira e perde <div class="texto_original fr-view">.
@@ -679,6 +692,10 @@ def citacoes(html, proprio):
         class_=lambda c: bool(c) and "texto_original" in str(c).split()))
     hashes, numeros = [], []
     ano_min = int(proprio["ano"])
+    for tag in _RE_TAG_A.findall(html):
+        h = hash_de(tag) if _RE_EH_MENCAO.search(tag) else None
+        if h and h not in hashes:
+            hashes.append(h)
     for a in blocos.select("a[href]"):
         h = hash_de(a["href"])
         if h and h not in hashes:

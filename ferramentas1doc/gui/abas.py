@@ -124,7 +124,8 @@ class AbaBusca(ttk.Frame):
     def __init__(self, pai):
         super().__init__(pai)
         _descricao(self, "Busca nas caixas do setor por etapa, fase, datas, mudanças de etapa e novo processo "
-                         "emitido a partir do processo. Gera uma planilha com as abas Resultado, Transições, "
+                         "emitido a partir do processo (pela emissão normal ou pela menção de um processo no "
+                         "outro). Gera uma planilha com as abas Resultado, Transições, "
                          "Novos processos e Parâmetros. Textos: sem diferença de "
                          "maiúsculas e acentos, \"contém\"; vários valores num campo, separados por ';', "
                          "valem como OU. Etapas: escolha na lista (ou digite parte do nome); para juntar "
@@ -186,7 +187,8 @@ class AbaBusca(ttk.Frame):
         self.combo_novo = ttk.Combobox(d, textvariable=self.v["novo_processo"],
                                        values=("", *busca_argv.NOVO_PROCESSO), width=6, state="readonly")
         self.combo_novo.grid(row=5, column=1, sticky="w", pady=2)
-        ttk.Label(d, text="a partir dele", foreground="#777").grid(row=5, column=2, columnspan=2, sticky="w")
+        ttk.Label(d, text="a partir dele ou por menção", foreground="#777").grid(row=5, column=2, columnspan=2,
+                                                                             sticky="w")
         self._campo(d, 6, 0, "novo_processo_de", "…emitido de:", 11, data=True)
         self._campo(d, 6, 2, "novo_processo_ate", "até:", 11, data=True)
         self._campo(d, 7, 0, "sem_mov_min", "Parado há (dias), mín.:", 6)
