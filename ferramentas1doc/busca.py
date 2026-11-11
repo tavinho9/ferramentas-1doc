@@ -26,7 +26,10 @@ Como funciona
      entrada na etapa atual é conferida contra o "Está aqui N …" do quadro; se
      divergir além da granularidade do rótulo, prevalece o quadro.
   5. Novo processo — os eventos "emitiu o Proc. Administrativo N/AAAA a partir deste
-     documento" da linha do tempo dizem que processos saíram deste e quando.
+     documento" da linha do tempo dizem que processos saíram deste e quando. Como a emissão
+     nem sempre é a normal, contam também as menções entre os processos (este cita o novo, ou
+     o novo cita este) e a origem no cabeçalho do processo novo; com o filtro de novo
+     processo, a busca lê os processos da licitação de todas as caixas para achá-las.
   6. Filtros e saída — .xlsx com abas Resultado, Transições, Novos processos e
      Parâmetros (CSV opcional) e um resumo no terminal.
 
@@ -85,6 +88,22 @@ RE_ETIQUETA = re.compile(r"Procedimento Licitat|Fase Preparat[óo]ria|Elabora[ç
 RE_PAGINAS = re.compile(r"P[áa]gina\s+(\d+)\s*/\s*(\d+)")
 RE_TOTAL_CAIXA = re.compile(r"""num_tab_(\w+)['"]\)\.html\(['"]\((\d[\d.]*)\)""")
 RE_DERIVADO = re.compile(r"emitiu\s+o\s+(.+?)\s+([\d.]+/\d{4})\s+a partir deste documento", re.I)
+# Menção a outro processo no texto (abertura e despachos): número com contexto de processo logo
+# antes e sem contexto de lei, requisição, contrato etc. (a mesma regra do Faltantes/Verificar).
+RE_CTX_PROCESSO = re.compile(r"(proc|abertura|emitid|gerad|autuad|instaurad|\bn[o]?\b|numero)")
+RE_CTX_OUTRO_DOC = re.compile(r"(lei|decreto|portaria|requisi|\brc\b|contrato|\bata\b|edital|pregao|"
+                              r"oficio|memorando|resolucao|instrucao|acordao|cnpj|cpf)")
+# Link de despacho para documento que não é processo (o texto do link diz o tipo)
+RE_LINK_OUTRO_DOC = re.compile(r"^(memorando|oficio|parecer|circular|despacho|decreto|portaria|anexo)")
+MAX_CITADOS = 40
+# Família da licitação, na ordem do fluxo: Elaboração de Documentação Preparatória → Fase
+# Preparatória → Abertura de Procedimento Licitatório. Um processo citado só conta como novo se
+# estiver adiante na família (ver aceita_mencao).
+FAMILIA = ((2, re.compile(r"abertura de procedimento")), (1, re.compile(r"fase preparatori")),
+           (0, re.compile(r"elaboracao de document\w* preparatori")))
+# Como o novo processo foi achado (coluna "Novos processos (vínculo)" e aba "Novos processos")
+V_EMISSAO, V_ORIGEM, V_CITADO, V_CITA = "emissão", "origem", "citado neste", "cita este"
+VINCULOS_NORMAIS = (V_EMISSAO, V_ORIGEM)
 
 
 class SessaoExpirada(Exception):
@@ -101,6 +120,12 @@ def sem_acento(s: str) -> str:
 def normtxt(s: str) -> str:
     """Comparação de textos: sem acento, sem caixa, espaços colapsados."""
     return re.sub(r"\s+", " ", sem_acento(s).casefold()).strip()
+
+
+def norm_contexto(s: str) -> str:
+    """Como o _norm do Faltantes: só letras e dígitos, minúsculos e sem acento, separados por um
+    espaço ('nº' vira 'n', 'Proc.' vira 'proc'). Para o contexto antes de um número citado."""
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", sem_acento(s or "").lower()).split())
 
 
 def normcod(s: str) -> str:
@@ -607,6 +632,42 @@ def _despachos(soup) -> list[dict]:
     return out
 
 
+def _citados(soup, proprio_numero: str | None, proprio_hash: str) -> list[dict]:
+    """Outros processos mencionados no texto de abertura e nos despachos (blocos .texto_original):
+    links para documentos (hash, e o número quando o texto do link o traz) e números NN.NNN/AAAA
+    com contexto de processo antes ("processo", "abertura", "nº"…) e sem contexto de lei,
+    requisição, contrato etc. Não filtra por ano: o mesmo registro serve para os dois sentidos
+    (este cita o novo; o novo cita este), e a data é conferida no uso (aceita_mencao).
+    Devolve [{numero, hash}], sem repetir, no máximo MAX_CITADOS."""
+    out = []
+
+    def add(numero, h):
+        if (numero and numero == proprio_numero) or (h and h == proprio_hash):
+            return
+        for c in out:  # link e número do mesmo processo viram um registro só
+            if (numero and c["numero"] == numero) or (h and c["hash"] == h):
+                c["numero"], c["hash"] = c["numero"] or numero, c["hash"] or h
+                return
+        if len(out) < MAX_CITADOS:
+            out.append({"numero": numero, "hash": h})
+
+    for bloco in soup.find_all(class_=lambda c: bool(c) and "texto_original" in str(c).split()):
+        for a in bloco.select("a[href]"):
+            h = ((parse_qs(urlparse(a["href"]).query).get("hash") or [""])[0]).upper()
+            rotulo = normtxt(txt(a))
+            if not h or RE_LINK_OUTRO_DOC.match(rotulo):
+                continue
+            nums = numeros_de_texto(txt(a))
+            add(nums[0] if nums else "", h)
+        texto = bloco.get_text(" ")
+        for m in RE_NUM_LIVRE.finditer(texto):
+            n = norm_numero(f"{m[1]}/{m[2]}")
+            antes = norm_contexto(texto[max(0, m.start() - 45):m.start()])
+            if n and RE_CTX_PROCESSO.search(antes) and not RE_CTX_OUTRO_DOC.search(antes[-30:]):
+                add(n, "")
+    return out
+
+
 def resolver_etapa(rotulo: str, titulos: list[str]) -> str:
     """O rótulo do despacho vem truncado ('Validação de ...'): casa por prefixo com o quadro."""
     r = (rotulo or "").strip()
@@ -814,6 +875,7 @@ def parse_detalhe(html: str, agora: datetime) -> dict:
         "permanencia": re.sub(r"^Est[áa] aqui\s*", "", desde, flags=re.I), "atipico": atipico,
         "entrada": iso(entrada), "entrada_fonte": entrada_fonte, "entrada_obs": entrada_obs,
         "status_setor": status_setor, "derivados": derivados, "emissoes": emissoes,
+        "citados": _citados(soup, norm_numero(numero or ""), hash_.upper()),
         "n_despachos": len(desp), "despachos": desp[-GUARDAR_DESPACHOS:], "transicoes": trans,
         "coletado_em": iso(agora), "versao": VERSAO,
     }
@@ -902,9 +964,14 @@ def listar(cli: Cliente1Doc, caixas: list[str], itds: set[str], de, ate, max_pag
     return lista, por_caixa, avisos
 
 
-def detalhar_um(cli: Cliente1Doc, numero: str, itd: str, item: dict | None, agora: datetime):
+def detalhar_um(cli: Cliente1Doc, numero: str | None, itd: str, item: dict | None, agora: datetime):
+    """`numero=None`: processo citado só por link (hash); vale o número que a página mostrar."""
     h = (item or {}).get("hash")
     det = parse_detalhe(cli.processo_por_hash(h, itd) if h else cli.processo_por_numero(numero, itd), agora)
+    if numero is None:
+        numero = det["numero"]
+        if not numero:
+            return None, {"numero": f"link {h[:10]}…", "motivo": "página sem número de processo", "obtido": ""}
     if det["numero"] != numero and h:  # hash velho: tenta pelo número
         det = parse_detalhe(cli.processo_por_numero(numero, itd), agora)
     # Cinto de segurança: o número devolvido TEM de ser o pedido (barra processo filho
@@ -934,7 +1001,8 @@ def detalhar(cli, pedidos: list[tuple[str, str, dict | None]], agora, paralelo: 
         except SessaoExpirada:
             raise
         except Exception as e:  # rede, HTML inesperado
-            return p, None, {"numero": numero, "motivo": "exceção", "obtido": str(e)[:120]}
+            return p, None, {"numero": numero or f"link {(item or {}).get('hash', '')[:10]}…", "motivo": "exceção",
+                             "obtido": str(e)[:120]}
 
     for rodada in (1, 2):  # falha é "refazer", não "não existe": uma segunda tentativa
         if not pedidos:
@@ -950,7 +1018,7 @@ def detalhar(cli, pedidos: list[tuple[str, str, dict | None]], agora, paralelo: 
                     ex.shutdown(wait=False, cancel_futures=True)
                     raise
                 if det:
-                    dets[chave(p[0], p[1])] = det
+                    dets[chave(det["numero"], p[1])] = det
                     feitos += 1
                 else:
                     falhas_rodada.append((p, falha))
@@ -1008,25 +1076,134 @@ def eh_processo(tipo: str) -> bool:
     return normtxt(tipo).startswith("proc")
 
 
-def novos_processos(det: dict) -> list[dict]:
-    """Processos emitidos a partir deste (eventos 'emitiu o … a partir deste documento'),
-    com a data já lida, do mais antigo ao mais recente. Detalhe gravado no cache antes desta
-    leitura só tem os números ('derivados'): entram sem data nem tipo."""
+def familia(texto: str) -> int | None:
+    """Posição na família da licitação (0 Elaboração de Documentação Preparatória, 1 Fase
+    Preparatória, 2 Abertura de Procedimento Licitatório) pelo quadro/assunto; None fora dela."""
+    t = normtxt(texto)
+    return next((n for n, rx in FAMILIA if rx.search(t)), None)
+
+
+def familia_det(det: dict) -> int | None:
+    return familia(f"{det.get('quadro', '')} | {det.get('tipo', '')}")
+
+
+class Universo:
+    """Processos já abertos (nesta busca, no índice das caixas ou no cache), para cruzar as
+    menções nos dois sentidos e a origem registrada no cabeçalho do processo novo."""
+
+    def __init__(self, dets):
+        self.por_numero, self.por_hash = {}, {}
+        self.citam, self.filhos = {}, {}
+        for d in dets:
+            n = norm_numero(d.get("numero") or "")
+            if not n:
+                continue
+            velho = self.por_numero.get(n)
+            if velho is not None and (velho.get("coletado_em") or "") > (d.get("coletado_em") or ""):
+                continue
+            self.por_numero[n] = d
+        for n, d in self.por_numero.items():
+            if d.get("hash"):
+                self.por_hash[d["hash"].upper()] = n
+            pai = norm_numero(d.get("pai") or "")
+            if pai:
+                self.filhos.setdefault(pai, []).append(n)
+            for c in d.get("citados") or []:
+                for k in {c.get("numero"), (c.get("hash") or "").upper()} - {"", None}:
+                    self.citam.setdefault(k, []).append(n)
+
+    def achar(self, citado: dict) -> dict | None:
+        """Pelo número; sem ele (ou sem processo aberto com ele), pelo hash do link."""
+        d = self.por_numero.get(citado.get("numero") or "")
+        if d is None and citado.get("hash"):
+            d = self.por_numero.get(self.por_hash.get(citado["hash"].upper(), ""))
+        return d
+
+
+def aceita_mencao(det: dict, outro: dict) -> bool:
+    """Um processo que cita este, ou que este cita, conta como o novo processo dele quando a
+    emissão não foi a normal ('a partir deste documento'): é Proc. Administrativo, não tem outra
+    origem registrada, foi emitido depois deste e está adiante na família da licitação
+    (Elaboração → Fase Preparatória → Abertura). Assim ficam de fora o pagamento ou o contrato que
+    citam o número da licitação, o processo semelhante citado como referência e o processo antigo."""
+    n, n_outro = norm_numero(det.get("numero") or ""), norm_numero(outro.get("numero") or "")
+    if not n_outro or n_outro == n or not eh_processo(outro.get("tipo_doc", "")):
+        return False
+    pai = norm_numero(outro.get("pai") or "")
+    if pai and pai != n:
+        return False
+    em, em_outro = de_iso(det.get("emissao")), de_iso(outro.get("emissao"))
+    if em and em_outro and em_outro < em:
+        return False
+    f, f_outro = familia_det(det), familia_det(outro)
+    return f_outro is not None and (f is None or f_outro > f)
+
+
+def novos_processos(det: dict, uni: Universo | None = None, mencoes: bool = True) -> list[dict]:
+    """Novos processos deste, do mais antigo ao mais recente, cada um com os vínculos que o acharam:
+      - emissão: evento 'emitiu o Proc. Administrativo N/AAAA a partir deste documento' (data do evento);
+      - origem: o processo novo traz este no cabeçalho de origem, sem o evento aqui;
+      - citado neste / cita este: emissão fora do normal, achada pela menção num sentido ou no
+        outro (ver aceita_mencao); a data é a de emissão do processo novo.
+    Origem e menções precisam do `uni`; `mencoes=False` fica só com emissão e origem.
+    Detalhe gravado no cache antes da leitura das emissões só tem os números ('derivados'):
+    entram sem data nem tipo."""
     if "emissoes" in det:
-        novos = [{**e, "data": de_iso(e.get("data"))} for e in det["emissoes"] or []
+        novos = [{**e, "data": de_iso(e.get("data")), "vinculos": [V_EMISSAO]} for e in det["emissoes"] or []
                  if eh_processo(e.get("tipo", ""))]
     else:
-        novos = [{"numero": n, "tipo": "", "data": None, "autor": "", "setor": "", "hash": ""}
-                 for n in det.get("derivados") or []]
+        novos = [{"numero": n, "tipo": "", "data": None, "autor": "", "setor": "", "hash": "",
+                  "vinculos": [V_EMISSAO]} for n in det.get("derivados") or []]
+    por_num = {n["numero"]: n for n in novos}
+
+    def add(outro, vinculo):
+        n = norm_numero(outro.get("numero") or "")
+        if n in por_num:
+            # vínculo normal (emissão/origem) já basta; menções só se somam entre si
+            vs = por_num[n]["vinculos"]
+            if vinculo not in vs and not any(v in VINCULOS_NORMAIS for v in vs):
+                vs.append(vinculo)
+            return
+        por_num[n] = {"numero": n, "tipo": outro.get("tipo_doc", ""), "data": de_iso(outro.get("emissao")),
+                      "autor": "", "setor": "", "hash": (outro.get("hash") or "").upper(),
+                      "url": outro.get("url", ""), "vinculos": [vinculo]}
+        novos.append(por_num[n])
+
+    proprio = norm_numero(det.get("numero") or "")
+    if uni is not None and proprio:
+        for n in uni.filhos.get(proprio, []):
+            outro = uni.por_numero[n]
+            if n != proprio and eh_processo(outro.get("tipo_doc", "")):
+                add(outro, V_ORIGEM)
+        if mencoes:
+            for c in det.get("citados") or []:
+                outro = uni.achar(c)
+                if outro is not None and aceita_mencao(det, outro):
+                    add(outro, V_CITADO)
+            chaves = [proprio] + ([det["hash"].upper()] if det.get("hash") else [])
+            for n in dict.fromkeys(q for k in chaves for q in uni.citam.get(k, [])):
+                outro = uni.por_numero[n]
+                if aceita_mencao(det, outro):
+                    add(outro, V_CITA)
+        for n in novos:  # etapa do novo processo, quando ele foi aberto
+            outro = uni.por_numero.get(n["numero"])
+            if outro is not None:
+                n["etapa"] = outro.get("etapa", "")
+                n["url"] = n.get("url") or outro.get("url", "")
     return sorted(novos, key=lambda n: n["data"] or datetime.min)
 
 
-def consolidar(item: dict | None, det: dict | None, agora: datetime, op) -> dict:
+def texto_novos(novos: list[dict]) -> str:
+    """'40.001/2026 (emissão), 39.144/2026 (cita este)' para a coluna do Resultado."""
+    return ", ".join(f"{n['numero']} ({' + '.join(n['vinculos'])})" for n in novos)
+
+
+def consolidar(item: dict | None, det: dict | None, agora: datetime, op, uni: Universo | None = None) -> dict:
     item, det = item or {}, det or {}
     desp = det.get("despachos") or []
     ult = desp[-1] if desp else {}
     trans = [{**t, "data": de_iso(t["data"])} for t in det.get("transicoes", [])]
-    novos = novos_processos(det)
+    novos = novos_processos(det, uni, mencoes=not getattr(op, "sem_mencoes", False))
     r = {
         "numero": det.get("numero") or item.get("numero"),
         "itd": det.get("itd") or item.get("itd", ""),
@@ -1056,6 +1233,7 @@ def consolidar(item: dict | None, det: dict | None, agora: datetime, op) -> dict
         "pai": det.get("pai", ""),
         "derivados": ", ".join(det.get("derivados") or []),
         "novos": novos,
+        "novos_texto": texto_novos(novos),
         # o mais recente; com o filtro de período, o mais recente dentro dele (ver montar_filtros)
         "novo_processo_em": max((n["data"] for n in novos if n["data"]), default=None),
         "caixa": item.get("caixa", ""),
@@ -1085,8 +1263,9 @@ def consolidar(item: dict | None, det: dict | None, agora: datetime, op) -> dict
 
 
 class Filtro:
-    def __init__(self, descricao: str, grupo: str, fonte: str, pred):
+    def __init__(self, descricao: str, grupo: str, fonte: str, pred, novo: bool = False):
         self.descricao, self.grupo, self.fonte, self.pred = descricao, grupo, fonte, pred
+        self.novo = novo  # filtro de novo processo (a busca completa as menções antes de aplicá-lo)
         # grupo:  "posicao" (afastável pela --excecao-cita-setor) | "geral"
         # fonte:  "lista" (avaliável só com a listagem) | "detalhe"
 
@@ -1174,11 +1353,13 @@ def montar_filtros(a) -> list[Filtro]:
             if periodo and r["_novos_periodo"]:
                 r["novo_processo_em"] = max(n["data"] for n in r["_novos_periodo"])
             return bool(r["_novos_periodo"])
-        F.append(Filtro("emitiu novo processo a partir dele" + (f" {_periodo(de, ate)}" if periodo else ""),
-                        "geral", "detalhe", emitiu))
+        F.append(Filtro("emitiu novo processo a partir dele" + (f" {_periodo(de, ate)}" if periodo else "")
+                        + ("" if a.sem_mencoes else " (emissão normal ou menção)"), "geral", "detalhe", emitiu,
+                        novo=True))
     if a.sem_novo_processo:
-        F.append(Filtro("não emitiu novo processo a partir dele", "geral", "detalhe",
-                        lambda r: not r["novos"]))
+        F.append(Filtro("não emitiu novo processo a partir dele"
+                        + ("" if a.sem_mencoes else " (nem por emissão normal nem por menção)"), "geral", "detalhe",
+                        lambda r: not r["novos"], novo=True))
     if a.emissao_de or a.emissao_ate:
         de, ate = a.emissao_de, a.emissao_ate
         F.append(Filtro(f"emissão {_periodo(de, ate)}", "geral", "lista",
@@ -1281,6 +1462,7 @@ COLUNAS = [
     ("Cita setor-alvo", "cita_alvo", 10), ("Observação", "obs", 45), ("Situação", "situacao", 12),
     ("Status no meu setor", "status_setor", 16), ("Processo de origem", "pai", 13),
     ("Processos derivados", "derivados", 16), ("Novo processo emitido em", "novo_processo_em", 17),
+    ("Novos processos (vínculo)", "novos_texto", 30),
     ("Setores envolvidos (caixa)", "para", 34), ("Caixa", "caixa", 14),
 ]
 CAMPOS_SIM_NAO = ("cita_alvo", "etapa_meu_setor")
@@ -1364,16 +1546,17 @@ def escrever_xlsx(caminho: str, regs: list[dict], params: list[tuple[str, str]],
     # Um processo novo por linha (o processo da aba Resultado é o de origem)
     wn = wb.create_sheet("Novos processos")
     ncols = [("Nº Processo", "numero", 13), ("Objeto", "assunto", 45), ("Novo processo", "novo", 13),
-             ("Emitido em", "data", 17), ("Autor", "autor", 24), ("Setor", "setor", 18),
-             ("Etapa atual do processo", "etapa_atual", 26)]
+             ("Vínculo", "vinculo", 16), ("Emitido em", "data", 17), ("Autor", "autor", 24), ("Setor", "setor", 18),
+             ("Etapa atual do processo", "etapa_atual", 26), ("Etapa do novo processo", "etapa", 26)]
     if marcar_novo:
-        ncols.insert(4, ("No período filtrado?", "no_periodo", 11))
+        ncols.insert(5, ("No período filtrado?", "no_periodo", 11))
     cabecalho(wn, ncols)
     lin = 2
     for r in regs:
         no_per = {id(n) for n in r.get("_novos_periodo", [])}
         for n in r["novos"]:
             linha = {**n, "numero": r["numero"], "assunto": r["assunto"], "novo": n["numero"],
+                     "vinculo": " + ".join(n.get("vinculos") or []),
                      "etapa_atual": r["etapa"], "no_periodo": "sim" if id(n) in no_per else "não"}
             for j, (_, campo, _) in enumerate(ncols, 1):
                 c = wn.cell(row=lin, column=j, value=limpo(linha.get(campo)))
@@ -1434,6 +1617,97 @@ def imprimir_resumo(regs: list[dict], mostrar: int):
 # =============================================================================
 # Orquestração
 # =============================================================================
+def _ano(numero: str) -> int:
+    n = norm_numero(numero or "")
+    return int(n.split("/")[1]) if n else 0
+
+
+def completar_mencoes(a, cli: Cliente1Doc, cache: dict, dets: dict, lista: dict, lista_completa: bool,
+                      candidatos: list[str], filtros: list[Filtro], agora: datetime, itds_ordem: list[str]) -> str:
+    """Antes do filtro de novo processo, abre o que falta para cruzar as menções (a emissão nem
+    sempre é a normal, 'a partir deste documento'):
+      1. índice das caixas do setor (Em aberto, Saída, Arquivados, Favoritos): os processos da
+         família da licitação emitidos desde o mais antigo dos processos de origem. É deles que
+         vem o "cita este" (o processo novo cita o de origem) e a origem no cabeçalho;
+      2. os processos que os de origem citam e que ainda não foram abertos ("citado neste").
+    Processo de origem = detalhado que passa nos demais filtros. O que for aberto fica no cache
+    (detalhe completo), e só é reaberto quando a última movimentação muda.
+    Devolve o resumo para a aba Parâmetros."""
+    outros = [f for f in filtros if not f.novo]
+    excecao = bool(a.excecao_cita_setor)
+    origens = [dets[k] for k in candidatos if k in dets
+               and avaliar(consolidar(lista.get(k), dets[k], agora, a), outros, excecao)]
+    if not origens:
+        return "nenhum processo de origem a conferir"
+    desde = min((de_iso(d.get("emissao")) or datetime(_ano(d["numero"]) or agora.year, 1, 1)) for d in origens)
+    desde = datetime.combine(desde.date(), datetime.min.time())
+
+    # 1. índice das caixas
+    if lista_completa:  # a listagem desta busca já leu todas as caixas, sem corte de emissão
+        indice, avisos = {k: v for k, v in lista.items() if v and (de_iso(v.get("emissao")) or desde) >= desde}, []
+    else:
+        print(f"Índice de menções: todas as caixas, processos emitidos desde {desde:%d/%m/%Y}")
+        indice, _, avisos = listar(cli, list(CAIXAS), set(itds_ordem), desde, None, a.max_paginas)
+        for av in avisos:
+            print(f"  Aviso: {av}")
+    da_familia = {k: it for k, it in indice.items() if familia(it.get("tipo", "")) is not None}
+    pedidos, do_cache = [], 0
+    for k, it in da_familia.items():
+        c = cache["det"].get(k)
+        if k in dets or (c and not a.refazer and "citados" in c and it.get("ult_mov")
+                         and c.get("_ult_mov_lista") == it.get("ult_mov")):
+            do_cache += 1
+            continue
+        itd, num = k.split("|")
+        pedidos.append((num, itd, it))
+    abertos, falhas_idx = {}, []
+    if pedidos:
+        print(f"Abrindo {len(pedidos)} processo(s) do índice de menções; {do_cache} já aberto(s) ou no cache.")
+        try:
+            falhas_idx = detalhar(cli, pedidos, agora, a.paralelo, abertos)
+        finally:
+            cache["det"].update(abertos)
+            if not a.sem_cache:
+                salvar_cache(a.cache, cache)
+
+    # 2. citados pelos processos de origem que ainda não foram abertos
+    uni = Universo([*cache["det"].values(), *dets.values()])
+    descartados = set(cache.setdefault("citados_descartados", []))
+    abrir = {}
+    for d in origens:
+        for c in d.get("citados") or []:
+            k = c["numero"] or c["hash"]
+            if uni.achar(c) is not None or k in descartados or k in abrir:
+                continue
+            if c["numero"] and _ano(c["numero"]) < _ano(d["numero"]):
+                continue  # o processo novo não é de ano anterior ao de origem
+            abrir[k] = (c["numero"] or None, itds_ordem[0], {"hash": c["hash"]} if c["hash"] else None)
+    citados, falhas_cit = {}, []
+    if abrir:
+        print(f"Abrindo {len(abrir)} processo(s) citado(s) nos despachos.")
+        try:
+            falhas_cit = detalhar(cli, list(abrir.values()), agora, a.paralelo, citados)
+        finally:
+            cache["det"].update(citados)
+            # número que não abre, página sem quadro nem rótulo: não adianta reabrir na próxima busca
+            # (falha de rede, sim)
+            ruins = {f["numero"] for f in falhas_cit if f["motivo"] != "exceção"}
+            cache["citados_descartados"] = sorted(descartados | {k for k, p in abrir.items()
+                                                                if (p[0] or f"link {k[:10]}…") in ruins})
+            if not a.sem_cache:
+                salvar_cache(a.cache, cache)
+    falhou = f", {len(falhas_idx)} falha(s): {', '.join(f['numero'] for f in falhas_idx[:10])}" if falhas_idx else ""
+    resumo = (f"índice das caixas: {len(da_familia)} processo(s) da família da licitação emitidos desde "
+              f"{desde:%d/%m/%Y} ({len(abertos)} aberto(s) agora{falhou}); "
+              f"citados nos despachos abertos agora: {len(citados)}")
+    if avisos:
+        resumo += "\nAVISOS do índice: " + "; ".join(avisos)
+    if falhas_idx:
+        print(f"  Aviso: {len(falhas_idx)} processo(s) do índice de menções não abriram; "
+              "a menção deles fica de fora.")
+    return resumo
+
+
 def executar(a, cli: Cliente1Doc | None, setor: str, agora: datetime) -> dict:
     itds_ordem = _lista([a.itd]) or ["3"]
     itds = set(itds_ordem)
@@ -1496,6 +1770,8 @@ def executar(a, cli: Cliente1Doc | None, setor: str, agora: datetime) -> dict:
         sys.exit("Os filtros pedidos exigem abrir os processos; retire --sem-detalhe.")
     dets, falhas, do_cache = {}, [], 0
     periodo_novo = bool(a.novo_processo_de or a.novo_processo_ate)
+    # Com o filtro de novo processo, as menções entre processos contam (a emissão nem sempre é a normal)
+    mencoes = any(f.novo for f in filtros) and not a.sem_mencoes
     if not a.sem_detalhe:
         pedidos = []
         for k in candidatos:
@@ -1504,14 +1780,19 @@ def executar(a, cli: Cliente1Doc | None, setor: str, agora: datetime) -> dict:
             # Detalhe gravado antes de a busca ler as emissões, com processo derivado: falta a
             # data do processo novo. Reabre (são poucos); no --offline, só pesa no filtro de período.
             sem_data_novo = bool(c) and "emissoes" not in c and bool(c.get("derivados"))
+            # Detalhe gravado antes de a busca ler as menções: reabre se o filtro precisa delas.
+            sem_citados = mencoes and bool(c) and "citados" not in c
             # Reaproveita só se a listagem é de agora e a última movimentação não mudou
             # (mudança de etapa sempre gera movimentação).
             reaproveita = c and not a.refazer and (a.offline or (
-                not sem_data_novo and lista_fresca and item and item.get("ult_mov")
+                not sem_data_novo and not sem_citados and lista_fresca and item and item.get("ult_mov")
                 and c.get("_ult_mov_lista") == item.get("ult_mov")))
             if reaproveita and sem_data_novo and periodo_novo:
                 falhas.append({"numero": k.split("|")[1], "obtido": "",
                                "motivo": "cache sem a data do novo processo (modo offline)"})
+            elif reaproveita and sem_citados:
+                falhas.append({"numero": k.split("|")[1], "obtido": "",
+                               "motivo": "cache sem as menções a outros processos (modo offline)"})
             elif reaproveita:
                 dets[k] = c
                 do_cache += 1
@@ -1532,13 +1813,25 @@ def executar(a, cli: Cliente1Doc | None, setor: str, agora: datetime) -> dict:
                 if not a.sem_cache:
                     salvar_cache(a.cache, cache)
 
+    # ---- novo processo: menções nos dois sentidos e origem no cabeçalho do processo novo ----
+    if not mencoes:
+        resumo_mencoes = ("não consideradas (--sem-mencoes)" if a.sem_mencoes else
+                          "sem o filtro de novo processo, só entre os processos já abertos (nesta busca ou no cache)")
+    elif a.offline:
+        resumo_mencoes = "modo offline: só entre os processos que estão no cache"
+    else:
+        lista_completa = (lista_fresca and set(caixas) == set(CAIXAS) and not a.emissao_de and not a.emissao_ate)
+        resumo_mencoes = completar_mencoes(a, cli, cache, dets, lista, lista_completa, candidatos, filtros,
+                                           agora, itds_ordem)
+    uni = Universo([*cache["det"].values(), *dets.values()])
+
     # ---- filtros finais ----
     excecao = bool(a.excecao_cita_setor)
     regs = []
     for k in candidatos:
         if not a.sem_detalhe and k not in dets:
             continue  # falha: fica declarada, não vira linha com chute
-        r = consolidar(lista.get(k), dets.get(k), agora, a)
+        r = consolidar(lista.get(k), dets.get(k), agora, a, uni)
         if r["numero"] and avaliar(r, filtros, excecao):
             regs.append(r)
     regs = ordenar(regs, a.ordenar)
@@ -1566,10 +1859,17 @@ def executar(a, cli: Cliente1Doc | None, setor: str, agora: datetime) -> dict:
                              "Em 'Saiu – Próxima' (Etapa Final não exibe 'Está aqui'), a data é a da entrada na Próxima."),
         ("Setores envolvidos", "Coluna 'Para' da caixa, com os setores escondidos no '+N' e nos badges truncados. "
                                "Não é o setor que está com o processo: para isso, veja 'Últ. despacho — para'."),
-        ("Novo processo", "Evento 'emitiu o Proc. Administrativo N/AAAA a partir deste documento' da linha do "
-                          "tempo, com a data/hora dele. Só conta processo: memorando, ofício etc. emitidos a partir "
-                          "do processo ficam de fora. 'Novo processo emitido em' é o mais recente (com o filtro de "
-                          "período, o mais recente dentro dele); a aba 'Novos processos' lista todos."),
+        ("Novo processo", "Vínculos (coluna 'Novos processos (vínculo)' e aba 'Novos processos'): "
+                          "• emissão — evento 'emitiu o Proc. Administrativo N/AAAA a partir deste documento' "
+                          "da linha do tempo, com a data/hora dele; • origem — o processo novo traz este no "
+                          "cabeçalho de origem, sem o evento aqui; • citado neste — o texto de abertura ou um "
+                          "despacho deste processo cita o novo (link ou número com 'processo', 'nº'…); "
+                          "• cita este — o processo novo cita este. Os dois últimos cobrem a emissão que não foi "
+                          "a normal e só valem para Proc. Administrativo sem outra origem, emitido depois deste e "
+                          "adiante na licitação (Elaboração → Fase Preparatória → Abertura); a data é a de emissão "
+                          "do processo novo. Só conta processo: memorando, ofício etc. ficam de fora. 'Novo processo "
+                          "emitido em' é o mais recente (com o filtro de período, o mais recente dentro dele)."),
+        ("Menções", resumo_mencoes),
         ("Dias", "Dias corridos de calendário até a data de posição."),
     ]
     return {"regs": regs, "falhas": falhas, "params": params, "filtros": filtros}
@@ -1595,8 +1895,10 @@ def montar_parser() -> argparse.ArgumentParser:
     --antes-de "Pesquisa de Mercado" --excecao-cita-setor SPOT-DCL-GP-CPPFI --pessoa "João Otávio"
   Emitiram novo processo (ex.: a Abertura saída da Fase Preparatória) em novembro, em todas as caixas:
     --caixas todas --novo-processo-de 01/11/2026 --novo-processo-ate 30/11/2026
-  Na Etapa Final da Elaboração e ainda sem novo processo emitido:
+  Na Etapa Final da Elaboração e ainda sem novo processo emitido (nem citado em outro processo):
     --fase Elaboração --etapa "Etapa Final" --sem-novo-processo
+  O mesmo, contando só a emissão normal ("a partir deste documento"):
+    --fase Elaboração --etapa "Etapa Final" --sem-novo-processo --sem-mencoes
   Processos de uma planilha/lista, sem varrer as caixas:
     --numeros-arquivo acompanhamento.xlsx
   Refiltrar sem acessar o 1Doc (usa o cache da última coleta):
@@ -1657,11 +1959,15 @@ filtros diferentes = E.""")
     g.add_argument("--sem-mov-min", type=int, metavar="N", help="dias sem movimentação ≥ N")
     g.add_argument("--sem-mov-max", type=int, metavar="N")
 
-    g = p.add_argument_group("Novo processo emitido a partir dele (evento 'emitiu o Proc. Administrativo …')")
+    g = p.add_argument_group("Novo processo emitido a partir dele (evento 'emitiu o Proc. Administrativo …' "
+                             "ou menção entre os processos)")
     g.add_argument("--novo-processo", action="store_true", help="emitiu ao menos um novo processo")
     g.add_argument("--novo-processo-de", metavar="DATA", help="…emitido a partir de DATA")
     g.add_argument("--novo-processo-ate", metavar="DATA", help="…emitido até DATA")
     g.add_argument("--sem-novo-processo", action="store_true", help="não emitiu nenhum novo processo")
+    g.add_argument("--sem-mencoes", action="store_true",
+                   help="só a emissão normal: ignora o processo novo que cita este ou é citado nele "
+                        "(e não monta o índice das caixas)")
 
     g = p.add_argument_group("Outros filtros")
     g.add_argument("--prioridade", action="append", metavar="P", help="Urgente, Alta, Média, Baixa (vírgula)")

@@ -9,9 +9,13 @@ roteador abaixo, que responde com HTML no formato da interface clássica do
 
 Um processo pode ganhar "emissoes": [(tipo, número, hash, datetime)], que viram
 eventos "emitiu o <tipo> <número> a partir deste documento" na linha do tempo.
+Para as menções entre processos, também: "assunto" (padrão: Abertura de
+Procedimento Licitatório), "emissao_dt" (datetime; padrão: hoje 09:15),
+"caixa" (padrão: entrada; None = fora das caixas, só abre pelo link ou pelo
+número), "pai" ((número, hash) do processo de origem, no cabeçalho) e
+"despacho" (HTML do texto do despacho).
 """
 
-import time
 from datetime import date, datetime, timedelta, timezone
 from urllib.parse import parse_qs, urlparse
 
@@ -41,6 +45,13 @@ PROCESSOS = {
     },
 }
 POR_NUMERO = {p["numero"].replace(".", ""): h for h, p in PROCESSOS.items()}
+ASSUNTO = "Abertura de Procedimento Licitatório"
+ID_ASSUNTO = {"Abertura de Procedimento Licitatório": "961721",
+              "Fase Preparatória de Procedimento Licitatório": "962809"}
+
+
+def emissao_dt(p):
+    return p.get("emissao_dt") or datetime.combine(HOJE, datetime.min.time()).replace(hour=9, minute=15)
 
 LOGADO = """<input type="hidden" id="sis_usr_email" value="teste@montesclaros.mg.gov.br">
 <input type="hidden" id="s_s" value="SPOT-DCL-GP-CPPFI"><input type="hidden" id="s_is" value="285">"""
@@ -56,12 +67,12 @@ def painel():
 def linha(h, p):
     return f"""<tr>
 <td><a class="link_emissao_a" href="./?pg=doc/ver&hash={h}&itd=3&origem=painel_setor">Proc.
-   Administrativo {p['numero']} <small class="data">{EMISSAO}</small></a></td>
+   Administrativo {p['numero']} <small class="data">{emissao_dt(p):%d/%m/%Y %H:%M}</small></a></td>
 <td><div class="td_remetente"><span class="badge badge_env tt">SS-DAF</span>
   <span class="pp" data-content="Maria da Silva">Maria S.</span></div></td>
 <td class="link_emissao td ignora normal celula_para"><span class="badge">SPOT-DCL-GP-CPPFI</span></td>
 <td class="link_emissao td ignora normal">{p['objeto']}
-  <span class="badge" title="Abertura de Procedimento Licitatório">Abertura de Proc...</span>
+  <span class="badge" title="{p.get('assunto', ASSUNTO)}">{p.get('assunto', ASSUNTO)[:12]}...</span>
   <div class="resumo">resumo do processo</div>
   <span class="label" title="Prioridade">{p['prioridade']}</span></td>
 <td><small class="tt data" title="Última movimentação em {HOJE:%d/%m/%Y} 10:00:00">2 horas</small></td>
@@ -69,10 +80,11 @@ def linha(h, p):
 
 
 def listagem(caixa, pagina):
-    linhas = "".join(linha(h, p) for h, p in PROCESSOS.items()) if caixa == "entrada" and pagina == 1 else ""
-    return f"""<div class="navega_caixa">Página 1/1</div>
+    da_caixa = [(h, p) for h, p in PROCESSOS.items() if p.get("caixa", "entrada") == caixa]
+    linhas = "".join(linha(h, p) for h, p in da_caixa) if pagina == 1 else ""
+    return f"""{'<div class="navega_caixa">Página 1/1</div>' if da_caixa else ''}
 <table class="table">{linhas}</table>
-<script>$('#num_tab_{caixa}').html('({len(PROCESSOS) if caixa == 'entrada' else 0})')</script>"""
+<script>$('#num_tab_{caixa}').html('({len(da_caixa)})')</script>"""
 
 
 def kanban(p, modelo=False):
@@ -108,21 +120,28 @@ def evento_emissao(tipo, numero, hash_, quando):
 
 def detalhe(h):
     p = PROCESSOS[h]
-    mk = int(time.mktime(datetime.combine(HOJE, datetime.min.time()).replace(hour=9, minute=15).timetuple()))
+    mk = int(emissao_dt(p).replace(tzinfo=timezone(timedelta(hours=-3))).timestamp())   # horário de Brasília
     eventos = "".join(evento_emissao(*e) for e in p.get("emissoes", []))
+    assunto = p.get("assunto", ASSUNTO)
+    pai = ""
+    if p.get("pai"):
+        pai = (f'<h2 class="tt pull-left emission_infos_item_from" title="Emitido a partir de">'
+               f'<a class="nd" href="./?pg=doc/ver&itd=3&hash={p["pai"][1]}&origem=base">Proc. Administrativo '
+               f'<small>{p["pai"][0]}</small></a></h2>')
     return f"""<html><body>{LOGADO}
 <input type="hidden" id="nome_em" value="Proc. Administrativo {p['numero']}">
 <input type="hidden" id="hash_emissao" value="{h}">
 <input type="hidden" id="id_setor_origem" value="12">
 <div id="emissao_principal" data-datamk="{mk}">
+  {pai}
   <h2 class="tt pull-left emission_infos_item_atual"><span class="nd">Proc. Administrativo</span>
     <small class="nd_num">{p['numero']}</small> <span class="label" title="Prioridade">{p['prioridade']}</span></h2>
-  <h4 class="tit tit_assunto" data-id_assunto="961721">{p['objeto']}
-    <span class="badge" title="Assunto: Abertura de Procedimento Licitatório">Abertura de Proc...</span></h4>
-  <a class="ir_quadro">Ir ao quadro: Abertura de Procedimento Licitatório</a>
+  <h4 class="tit tit_assunto" data-id_assunto="{ID_ASSUNTO.get(assunto, '1')}">{p['objeto']}
+    <span class="badge" title="Assunto: {assunto}">{assunto[:12]}...</span></h4>
+  <a class="ir_quadro">Ir ao quadro: {assunto}</a>
   {kanban(p)}
   <div id="campo_adicional_descricao_objeto"><div class="cp">
-    <span data-valor="{p['descricao']}">Objeto<span>*</span>:</span><small>{p['descricao']}</small></div></div>
+    <span data-valor="{p.get('descricao', p['objeto'])}">Objeto<span>*</span>:</span><small>{p.get('descricao', p['objeto'])}</small></div></div>
 </div>
 <span class="badge" data-id_setor="12" title="Secretaria de Saúde » SS-DAF">SS-DAF</span>
 <div class="timeline_conteudo" data-datamk="{mk}">
@@ -130,7 +149,7 @@ def detalhe(h):
   <abbr class="despacho_data" title="Em {HOJE:%d/%m/%Y} 10:00">hoje</abbr>
   <div class="rf_header"><strong>Despacho 1</strong></div>
   <div class="rf_de"><span class="badge_env">SS-DAF</span></div>
-</th></tr><tr><td class="celula_despacho"><div class="texto_original">Encaminho para análise.</div></td></tr>
+</th></tr><tr><td class="celula_despacho"><div class="texto_original fr-view">{p.get('despacho', 'Encaminho para análise.')}</div></td></tr>
 </table></div>
 {eventos}
 <div class="tm_conteudo"><div id="parent_wa" data-current_idph="1">{kanban(p, modelo=True)}</div></div>

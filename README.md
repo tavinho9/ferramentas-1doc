@@ -80,14 +80,42 @@ Ainda na **Busca**, **Emitiu novo processo** separa os processos de onde já
 saiu um novo Proc. Administrativo (por exemplo, a Abertura emitida a partir
 da Fase Preparatória): *Sim* fica só com eles, *Não* fica só com os que ainda
 não emitiram nenhum. Em **…emitido de / até** dá para pedir que o novo
-processo tenha sido emitido num período (com as datas, vale *Sim*). A data
-vem do evento "emitiu o Proc. Administrativo N/AAAA a partir deste
-documento" da linha do tempo; memorandos, ofícios etc. emitidos do processo
-não contam. A planilha ganha a coluna *Novo processo emitido em* (o mais
-recente; com período, o mais recente dentro dele) e a aba *Novos
-processos*, com cada processo novo, a data, quem emitiu e o link para
-abri-lo. Na linha de comando: `--novo-processo`, `--sem-novo-processo`,
-`--novo-processo-de` e `--novo-processo-ate`.
+processo tenha sido emitido num período (com as datas, vale *Sim*).
+Memorandos, ofícios etc. emitidos do processo não contam.
+
+Nem sempre o processo novo é emitido do jeito normal ("emitir a partir deste
+documento"): às vezes a Abertura é criada à parte e só cita o número da Fase
+Preparatória, ou um despacho da fase avisa em que processo a demanda seguiu.
+Por isso a busca acha o processo novo de quatro jeitos, mostrados na coluna
+*Novos processos (vínculo)* e na coluna *Vínculo* da aba *Novos processos*:
+
+| Vínculo | De onde vem | Data usada |
+|---|---|---|
+| *emissão* | evento "emitiu o Proc. Administrativo N/AAAA a partir deste documento" da linha do tempo | a do evento |
+| *origem* | o processo novo traz este no cabeçalho de origem, sem o evento aqui | a de emissão do processo novo |
+| *citado neste* | o texto de abertura ou um despacho deste processo cita o novo (link, ou número com "processo", "nº", "abertura"…) | a de emissão do processo novo |
+| *cita este* | o processo novo cita este, no texto de abertura ou num despacho | a de emissão do processo novo |
+
+As menções (*citado neste* e *cita este*) só valem para um Proc.
+Administrativo que não tem outra origem registrada, foi emitido depois deste
+e está adiante na licitação (Elaboração de Documentação Preparatória → Fase
+Preparatória → Abertura). Assim o pagamento ou o contrato que citam o número
+da licitação, a fase semelhante citada como referência e o processo antigo
+ficam de fora. Para achar quem cita o processo, a busca lê, uma vez, os
+processos da licitação de todas as caixas do setor emitidos desde o processo
+mais antigo do resultado, e abre os processos citados que não estão nas
+caixas. O que ela abre fica no cache; nas próximas buscas só é reaberto o que
+se movimentou. O resumo fica na aba *Parâmetros* (linha *Menções*). Sem o
+filtro de novo processo, as colunas mostram as menções entre os processos
+já abertos, sem abrir outros.
+
+A planilha também ganha a coluna *Novo processo emitido em* (o mais recente;
+com período, o mais recente dentro dele) e, na aba *Novos processos*, cada
+processo novo, o vínculo, a data, quem emitiu (na emissão normal), a etapa
+em que ele está e o link para abri-lo. Na linha de comando:
+`--novo-processo`, `--sem-novo-processo`, `--novo-processo-de` e
+`--novo-processo-ate`; `--sem-mencoes` (em **Outras opções**) volta a
+considerar só a emissão normal e não lê as outras caixas.
 
 Os filtros mais usados têm campo próprio. Os demais (por
 exemplo `--setor-etapa`, `--cita-setor`, `--ordenar`) vão em **Outras
