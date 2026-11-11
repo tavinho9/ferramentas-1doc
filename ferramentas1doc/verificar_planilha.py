@@ -20,7 +20,7 @@ contendo SÓ os processos que chegaram à Pesquisa de Mercado ou
 passaram dela:
   • a aba original, formatação preservada, sem as linhas dos demais
     processos, mais as colunas
-        Etapa atual (1Doc) | Processo pai | Processo filho |
+        Etapa atual (1Doc) | Processo pai | Processo filho | Menções |
         Objeto (abertura) | Observação
     - Processo pai: de onde o processo foi emitido (cabeçalho de origem)
     - Processo filho: o emitido a partir dele. Para a elaboração/fase
@@ -28,6 +28,11 @@ passaram dela:
       cadeia quando houver mais de um nível (37.923/2026 → 39.144/2026);
       para os demais, os listados em "É base de" na página (só a tabela
       "É base de" e os eventos "emitiu o …", nunca links em despachos)
+    - Menções: todos os processos citados no texto de abertura e nos
+      despachos (menção do 1Doc, link ou número com "processo", "nº"…
+      antes), mesmo quando não dá para dizer se são o pai ou o filho;
+      "(pai)" e "(filho)" marcam os que estão nas colunas ao lado e
+      "(número no texto)" o citado só pelo número digitado
     - Objeto (abertura): campo adicional "Objeto" (descricao_objeto) do
       processo de abertura (fluxo com a Pesquisa de Mercado ou etiqueta
       "Abertura de Procedimento Licitatório"): o PRÓPRIO processo da linha,
@@ -119,7 +124,7 @@ from openpyxl.utils import column_index_from_string, get_column_letter
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-from . import caminhos, config, navegador, sessao as sessao_1doc
+from . import busca, caminhos, config, navegador, sessao as sessao_1doc
 
 
 # ============================================================
@@ -1081,9 +1086,29 @@ def abrir(ctx, item, link=None):
     return None
 
 
+def anotar_mencoes(ctx, res, citados):
+    """Coluna Menções: os processos citados na página, com (pai) e (filho)
+    para os que já estão nas colunas ao lado. Link sem número no texto vira
+    número pelo cache, quando o hash já foi localizado antes; o link da célula
+    leva à primeira menção."""
+    filhos = [f["numero"] for f in res["filhos"]] + list(res["novos"])
+    if res.get("cadeia"):
+        filhos += [x.strip() for x in res["cadeia"].split("→")]
+    por_hash = None
+
+    def achar(c):
+        nonlocal por_hash
+        if por_hash is None:
+            with ctx.lock_cache:
+                por_hash = {v: k for k, v in ctx.cache.items() if isinstance(v, str) and ler_numero(k)}
+        return por_hash.get(c["hash"])
+    res["mencoes"] = busca.texto_mencoes(citados, (res.get("pai") or {}).get("numero", ""), filhos, achar)
+    res["mencoes_url"] = next((url_detalhe(c["hash"]) for c in citados if c["hash"]), "")
+
+
 def processar(ctx, item):
     res = dict(item, hash=None, url="", veredito=INDET, etapa="", obs="", fonte="",
-               elaboracao=False, novos=[], novo=None, pai=None, filhos=[])
+               elaboracao=False, novos=[], novo=None, pai=None, filhos=[], mencoes="", mencoes_url="")
     achado = abrir(ctx, item, item["link_planilha"])
     if achado is None:
         res["obs"] = "Processo não localizado no 1Doc"
@@ -1117,6 +1142,7 @@ def processar(ctx, item):
         aplicar_novo_processo(ctx, res, html)
     elif res["filhos"] and not res.get("objeto_filho"):
         objeto_dos_filhos(ctx, res)
+    anotar_mencoes(ctx, res, busca.mencoes_da_pagina(html, item["numero"], h))
     return res
 
 
@@ -1146,7 +1172,7 @@ AZUL = PatternFill("solid", start_color="1F4E78")
 LINK = dict(color="0563C1", underline="single")
 
 # Colunas acrescentadas no fim da aba, nesta ordem
-COLUNAS_NOVAS = ("Etapa atual (1Doc)", "Processo pai", "Processo filho",
+COLUNAS_NOVAS = ("Etapa atual (1Doc)", "Processo pai", "Processo filho", "Menções",
                  "Objeto (abertura)", "Observação")
 # Colunas que este script (ou versão anterior) gera: se a planilha de
 # entrada for uma saída anterior, saem e o bloco é refeito junto, na ordem
@@ -1177,7 +1203,7 @@ def entra(r):
 
 def exportar(wb, ws, lin_cab, col_num, resultados, destino):
     """Mantém na aba só as linhas que chegaram à etapa de corte, acrescenta
-    Etapa atual, Processo pai, Processo filho e Observação e liga o
+    Etapa atual, Processo pai, Processo filho, Menções e Observação e liga o
     autofiltro em todas as colunas.
     Devolve quantas linhas ficaram; com 0, não salva arquivo nenhum."""
     if not any(entra(r) for r in resultados):
@@ -1233,7 +1259,7 @@ def exportar(wb, ws, lin_cab, col_num, resultados, destino):
 
     # Bloco das colunas novas no fim, com o estilo do cabeçalho do número
     ref = ws.cell(lin_cab, col_num)
-    col = dict(zip(("etapa", "pai", "filho", "objeto_filho", "obs"),
+    col = dict(zip(("etapa", "pai", "filho", "mencoes", "objeto_filho", "obs"),
                    range(n_orig + 1, n_orig + 1 + len(COLUNAS_NOVAS))))
     for c, titulo in zip(col.values(), COLUNAS_NOVAS):
         cel = ws.cell(lin_cab, c, titulo)
@@ -1261,6 +1287,7 @@ def exportar(wb, ws, lin_cab, col_num, resultados, destino):
             escrever(linha, "filho", "; ".join(f["numero"] for f in fs), fs[0]["url"])
         else:
             escrever(linha, "filho", None)
+        escrever(linha, "mencoes", r.get("mencoes"), r.get("mencoes_url"))
         escrever(linha, "objeto_filho", r.get("objeto_filho"))
         escrever(linha, "obs", r["obs"])
         cel = ws.cell(linha, col_num)

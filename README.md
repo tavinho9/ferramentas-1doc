@@ -105,6 +105,16 @@ sem "lei", "requisição", "contrato"…). Vale conferir primeiro as que vieram
 só do número digitado. O *Faltantes* e o *Verificar planilha* também passam
 a usar a menção do 1Doc para achar o processo novo.
 
+**Coluna Menções.** A planilha da *Busca*, a do *Faltantes* e a do
+*Verificar planilha* têm a coluna *Menções*, com todos os processos citados
+no texto de abertura e nos despachos (menção do 1Doc, link ou número com
+"processo", "nº"… antes), mesmo quando não dá para dizer se são o processo
+pai ou o filho. *(pai)* marca o processo de origem, *(filho)* o processo novo
+achado e *(número no texto)* o citado só pelo número digitado; a célula leva
+à primeira menção. A primeira *Busca* depois de atualizar reabre os processos
+guardados no cache por versão anterior, para ler as menções; no `--offline`,
+eles saem com "menções não lidas" na *Observação*.
+
 As menções (*citado neste* e *cita este*) só valem para um Proc.
 Administrativo que não tem outra origem registrada, foi emitido depois deste
 e está adiante na licitação (Elaboração de Documentação Preparatória → Fase
