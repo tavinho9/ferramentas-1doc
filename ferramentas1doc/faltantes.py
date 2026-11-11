@@ -41,8 +41,13 @@ SAÍDA
 <planilha>_faltantes_AAAA-MM-DD_HHMM.xlsx na pasta de saída (padrão: Área de
 Trabalho; a original não é alterada), aberta ao final, com as colunas
   Nº Processo | Prioridade | Objeto | Etapa | Secretaria |
-  Caixa | Último despacho | Trecho do último despacho | Observação
+  Caixa | Último despacho | Trecho do último despacho | Menções | Observação
 (as cinco primeiras no formato da planilha, para colar direto nela).
+Menções: todos os processos citados no texto de abertura e nos despachos
+(menção do 1Doc, link ou número com "processo", "nº"… antes), mesmo
+quando não dá para dizer se são o pai ou o filho; "(pai)" é o processo de
+origem, "(filho)" o processo novo achado e "(número no texto)" o citado só
+pelo número digitado.
 Se houver processos excluídos só por citarem cancelamento, vão para a aba
 "Cancelados (conferir)", com o trecho da menção. Se não houver nem
 faltantes nem cancelados, nenhum arquivo é gerado. O resumo do terminal mostra
@@ -84,7 +89,7 @@ from openpyxl.worksheet.table import Table, TableStyleInfo
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-from . import caminhos, config, navegador, processos_do_dia, sessao as sessao_1doc
+from . import busca, caminhos, config, navegador, processos_do_dia, sessao as sessao_1doc
 
 
 # ============================================================
@@ -1175,7 +1180,7 @@ def classificar(ctx, ln):
     num = ler_numero(ln["numero"])
     res = dict(ln, ano=num[2], url=url_detalhe(ln["hash"]), situacao=ERRO,
                objeto="", etapa="", secretaria="", ult_data="", ult_texto="",
-               obs="", origem_num="", novos=[])
+               obs="", origem_num="", novos=[], mencoes="", mencoes_url="")
     # Já passou da Pesquisa numa execução anterior: estado terminal (as marcas
     # de tempo das etapas percorridas não somem, então "retornou" continua
     # SIM). Evita reabrir centenas de arquivados a cada execução.
@@ -1236,6 +1241,9 @@ def classificar(ctx, ln):
     despachos = ler_despachos(html)
     if despachos:
         res.update(ult_data=despachos[-1]["data"], ult_texto=despachos[-1]["texto"])
+    # As linhas que podem ir para a planilha (faltante, cancelado) levam as menções
+    citados = busca.mencoes_da_pagina(html, ln["numero"], ln["hash"])
+    anotar_mencoes(ctx, res, citados)
     desp_cancel = cancelamento_em(despachos)
     if desp_cancel:
         onde = desp_cancel["rotulo"] or desp_cancel["data"] or "último despacho"
@@ -1246,6 +1254,7 @@ def classificar(ctx, ln):
 
     _o_hash, o_num = ler_origem(html)
     res["origem_num"] = o_num or ""
+    anotar_mencoes(ctx, res, citados)
     if o_num and o_num in ctx.planilha:
         res.update(situacao=VINCULADO, obs=f"Emitido a partir de {o_num}, que está na planilha")
         return res
@@ -1256,6 +1265,7 @@ def classificar(ctx, ln):
         for n in novos:
             todos += [n["numero"]] + ([n["via"]["numero"]] if n["via"] else [])
         res["novos"] = todos
+        anotar_mencoes(ctx, res, citados)
         na_pl = [n for n in todos if n in ctx.planilha]
         if na_pl:
             res.update(situacao=VINCULADO,
@@ -1283,6 +1293,23 @@ def classificar(ctx, ln):
     return res
 
 
+def anotar_mencoes(ctx, res, citados):
+    """Coluna Menções: os processos citados na página, com (pai) para a
+    origem e (filho) para o processo novo achado, se já se sabe. Link sem
+    número no texto vira número pelo cache, quando o hash já foi localizado
+    antes; o link da célula leva à primeira menção."""
+    por_hash = None
+
+    def achar(c):
+        nonlocal por_hash
+        if por_hash is None:
+            with ctx.lock_cache:
+                por_hash = {v: k for k, v in ctx.cache.items() if isinstance(v, str) and ler_numero(k)}
+        return por_hash.get(c["hash"])
+    res["mencoes"] = busca.texto_mencoes(citados, res.get("origem_num", ""), res.get("novos") or [], achar)
+    res["mencoes_url"] = next((url_detalhe(c["hash"]) for c in citados if c["hash"]), "")
+
+
 def deduplicar(faltantes):
     """Elaboração e processo novo dela, ambos faltando: fica só o novo."""
     nums = {r["numero"] for r in faltantes}
@@ -1302,12 +1329,12 @@ def deduplicar(faltantes):
 # ============================================================
 
 AZUL = PatternFill("solid", start_color="1F4E78")
-COLUNAS = ("Nº Processo", "Prioridade", "Objeto", "Etapa", "Secretaria",
-           "Caixa", "Último despacho", "Trecho do último despacho", "Observação")
+COLUNAS_BASE = ("Nº Processo", "Prioridade", "Objeto", "Etapa", "Secretaria", "Caixa", "Último despacho")
+COLUNAS = COLUNAS_BASE + ("Trecho do último despacho", "Menções", "Observação")
 TRECHO_MAX = 300
 
 
-COLUNAS_CANCEL = COLUNAS[:-2] + ("Trecho com a menção a cancelamento", "Observação")
+COLUNAS_CANCEL = COLUNAS_BASE + ("Trecho com a menção a cancelamento", "Menções", "Observação")
 
 
 def _data_despacho(txt):
@@ -1333,9 +1360,13 @@ def _preencher_aba(ws, linhas, colunas, trecho_de, nome_tabela):
     for i, r in enumerate(linhas, 2):
         data = _data_despacho(r["ult_data"])
         valores = (r["numero"], r["prioridade"], r["objeto"], r["etapa"], r["secretaria"],
-                   ", ".join(r["caixas"]), data, trecho_de(r), r["obs"])
+                   ", ".join(r["caixas"]), data, trecho_de(r), r.get("mencoes") or None, r["obs"])
         for c, v in enumerate(valores, 1):
             ws.cell(i, c, v)
+        if r.get("mencoes_url"):
+            cel = ws.cell(i, 9)
+            cel.hyperlink = r["mencoes_url"]
+            cel.font = Font(color="0563C1", underline="single")
         if isinstance(data, datetime):
             ws.cell(i, 7).number_format = "dd/mm/yyyy hh:mm" if (data.hour or data.minute) else "dd/mm/yyyy"
         cel = ws.cell(i, 1)

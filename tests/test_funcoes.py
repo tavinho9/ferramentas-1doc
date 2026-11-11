@@ -192,6 +192,19 @@ def test_citados_mencao_do_1doc():
         {"numero": "27.000/2026", "hash": "AAAA0000BBBB1111CCCC2222", "fonte": "mencao"}]
 
 
+def test_texto_mencoes():
+    """Coluna Menções: todas as citações, com (pai)/(filho) quando se sabe e a fonte fraca marcada."""
+    from ferramentas1doc import busca
+    citados = [{"numero": "28.000/2026", "hash": "", "fonte": "texto"},
+               {"numero": "39.144/2026", "hash": "AB", "fonte": "mencao"},
+               {"numero": "", "hash": "5476D715A594730A44C8", "fonte": "link"},
+               {"numero": "", "hash": "FFFF000011112222", "fonte": "mencao"}]
+    achar = {"5476D715A594730A44C8": "26.831/2026"}.get
+    assert busca.texto_mencoes(citados, "28.000/2026", ["39.144/2026"], lambda c: achar(c["hash"])) == (
+        "28.000/2026 (pai; número no texto), 39.144/2026 (filho), 26.831/2026, link FFFF000011…")
+    assert busca.texto_mencoes([]) == ""
+
+
 def _det(numero, assunto, emissao, pai="", tipo_doc="Proc. Administrativo", citados=(), hash_=""):
     return {"numero": numero, "tipo_doc": tipo_doc, "quadro": assunto, "tipo": assunto, "pai": pai,
             "emissao": emissao, "citados": [{"numero": c, "hash": ""} for c in citados], "hash": hash_,

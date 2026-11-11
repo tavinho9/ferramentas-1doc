@@ -96,6 +96,10 @@ RE_CTX_OUTRO_DOC = re.compile(r"(lei|decreto|portaria|requisi|\brc\b|contrato|\b
 # Link de despacho para documento que não é processo (o texto do link diz o tipo)
 RE_LINK_OUTRO_DOC = re.compile(r"^(memorando|oficio|parecer|circular|despacho|decreto|portaria|anexo)")
 MAX_CITADOS = 40
+# Versão da leitura das citações gravada no detalhe ("citados_v"). Detalhe sem ela, ou com uma
+# anterior, é reaberto com acesso ao 1Doc. 2: menções do 1Doc (data-mention) em qualquer lugar da
+# página e a fonte de cada citação.
+CITADOS_VERSAO = 2
 # De onde veio a citação, da mais confiável para a menos (ver _citados), e como aparece na planilha
 FONTES_CITACAO = ("mencao", "link", "texto")
 ROTULO_FONTE = {"mencao": "menção do 1Doc", "link": "link no texto", "texto": "número no texto"}
@@ -684,6 +688,34 @@ def _citados(soup, proprio_numero: str | None, proprio_hash: str) -> list[dict]:
     return out
 
 
+def citados_atuais(det: dict) -> bool:
+    """O detalhe traz as citações lidas pela versão atual (ver CITADOS_VERSAO)?"""
+    return "citados" in det and (det.get("citados_v") or 0) >= CITADOS_VERSAO
+
+
+def mencoes_da_pagina(html: str, proprio_numero: str = "", proprio_hash: str = "") -> list[dict]:
+    """As citações de uma página inteira do processo (para o Faltantes e o Verificar planilha)."""
+    return _citados(BeautifulSoup(html, PARSER), norm_numero(proprio_numero or ""), (proprio_hash or "").upper())
+
+
+def texto_mencoes(citados: list[dict], pai: str = "", filhos=(), achar=None) -> str:
+    """Coluna "Menções": todos os processos citados, mesmo quando não dá para dizer se são o pai
+    ou o filho. '(pai)' é o processo de origem; '(filho)', um dos processos novos; '(número no
+    texto)', citação só pelo número digitado. `achar(citado)` dá o número de um link sem número.
+    Ex.: '28.133/2026 (pai), 39.144/2026 (filho), 30.161/2026 (número no texto)'."""
+    pai = norm_numero(pai or "") or ""
+    filhos = {norm_numero(f or "") for f in filhos} - {None}
+    partes = []
+    for c in citados or []:
+        n = c.get("numero") or ((achar(c) or "") if achar else "")
+        extra = ["pai"] if n and n == pai else ["filho"] if n and n in filhos else []
+        if c.get("fonte") == "texto":
+            extra.append(ROTULO_FONTE["texto"])
+        rotulo = n or f"link {(c.get('hash') or '')[:10]}…"
+        partes.append(rotulo + (f" ({'; '.join(extra)})" if extra else ""))
+    return ", ".join(partes)
+
+
 def forca_fonte(fonte: str) -> int:
     """Posição em FONTES_CITACAO (menor = mais confiável); fonte desconhecida fica por último."""
     return FONTES_CITACAO.index(fonte) if fonte in FONTES_CITACAO else len(FONTES_CITACAO)
@@ -896,7 +928,7 @@ def parse_detalhe(html: str, agora: datetime) -> dict:
         "permanencia": re.sub(r"^Est[áa] aqui\s*", "", desde, flags=re.I), "atipico": atipico,
         "entrada": iso(entrada), "entrada_fonte": entrada_fonte, "entrada_obs": entrada_obs,
         "status_setor": status_setor, "derivados": derivados, "emissoes": emissoes,
-        "citados": _citados(soup, norm_numero(numero or ""), hash_.upper()),
+        "citados": _citados(soup, norm_numero(numero or ""), hash_.upper()), "citados_v": CITADOS_VERSAO,
         "n_despachos": len(desp), "despachos": desp[-GUARDAR_DESPACHOS:], "transicoes": trans,
         "coletado_em": iso(agora), "versao": VERSAO,
     }
@@ -1261,6 +1293,8 @@ def consolidar(item: dict | None, det: dict | None, agora: datetime, op, uni: Un
         "derivados": ", ".join(det.get("derivados") or []),
         "novos": novos,
         "novos_texto": texto_novos(novos),
+        "mencoes": texto_mencoes(det.get("citados") or [], det.get("pai", ""), [n["numero"] for n in novos],
+                                 (lambda c: (uni.achar(c) or {}).get("numero")) if uni else None),
         # o mais recente; com o filtro de período, o mais recente dentro dele (ver montar_filtros)
         "novo_processo_em": max((n["data"] for n in novos if n["data"]), default=None),
         "caixa": item.get("caixa", ""),
@@ -1269,6 +1303,8 @@ def consolidar(item: dict | None, det: dict | None, agora: datetime, op, uni: Un
         "tem_detalhe": bool(det),
         "_obs": [x for x in (det.get("atipico"), det.get("entrada_obs")) if x],
     }
+    if det and not citados_atuais(det):
+        r["_obs"].append("menções não lidas: detalhe gravado por versão anterior (rode com acesso ao 1Doc)")
     # Etapa reservada ao setor logado? (data-restrito_para_id_setor contém o id do setor da sessão)
     id_setor = getattr(op, "_id_setor", "") or ""
     ids = det.get("setor_etapa_ids") or []
@@ -1489,7 +1525,7 @@ COLUNAS = [
     ("Cita setor-alvo", "cita_alvo", 10), ("Observação", "obs", 45), ("Situação", "situacao", 12),
     ("Status no meu setor", "status_setor", 16), ("Processo de origem", "pai", 13),
     ("Processos derivados", "derivados", 16), ("Novo processo emitido em", "novo_processo_em", 17),
-    ("Novos processos (vínculo)", "novos_texto", 30),
+    ("Novos processos (vínculo)", "novos_texto", 30), ("Menções", "mencoes", 34),
     ("Setores envolvidos (caixa)", "para", 34), ("Caixa", "caixa", 14),
 ]
 CAMPOS_SIM_NAO = ("cita_alvo", "etapa_meu_setor")
@@ -1539,7 +1575,7 @@ def escrever_xlsx(caminho: str, regs: list[dict], params: list[tuple[str, str]],
             c = ws.cell(row=i, column=j, value=limpo(v))
             if isinstance(v, datetime):
                 c.number_format = fmt_dh
-            if campo in ("assunto", "historico", "obs", "para"):
+            if campo in ("assunto", "historico", "obs", "para", "mencoes"):
                 c.alignment = Alignment(wrap_text=True, vertical="top")
             if campo == "numero" and r.get("url"):
                 c.hyperlink, c.font = r["url"], Font(color="0563C1", underline="single")
@@ -1682,7 +1718,7 @@ def completar_mencoes(a, cli: Cliente1Doc, cache: dict, dets: dict, lista: dict,
     pedidos, do_cache = [], 0
     for k, it in da_familia.items():
         c = cache["det"].get(k)
-        if k in dets or (c and not a.refazer and "citados" in c and it.get("ult_mov")
+        if k in dets or (c and not a.refazer and citados_atuais(c) and it.get("ult_mov")
                          and c.get("_ult_mov_lista") == it.get("ult_mov")):
             do_cache += 1
             continue
@@ -1808,8 +1844,9 @@ def executar(a, cli: Cliente1Doc | None, setor: str, agora: datetime) -> dict:
             # Detalhe gravado antes de a busca ler as emissões, com processo derivado: falta a
             # data do processo novo. Reabre (são poucos); no --offline, só pesa no filtro de período.
             sem_data_novo = bool(c) and "emissoes" not in c and bool(c.get("derivados"))
-            # Detalhe gravado antes de a busca ler as menções: reabre se o filtro precisa delas.
-            sem_citados = mencoes and bool(c) and "citados" not in c
+            # Detalhe gravado antes da leitura atual das menções: reabre (a coluna Menções precisa
+            # delas); no --offline, só pesa no filtro de novo processo.
+            sem_citados = bool(c) and not citados_atuais(c)
             # Reaproveita só se a listagem é de agora e a última movimentação não mudou
             # (mudança de etapa sempre gera movimentação).
             reaproveita = c and not a.refazer and (a.offline or (
@@ -1818,7 +1855,7 @@ def executar(a, cli: Cliente1Doc | None, setor: str, agora: datetime) -> dict:
             if reaproveita and sem_data_novo and periodo_novo:
                 falhas.append({"numero": k.split("|")[1], "obtido": "",
                                "motivo": "cache sem a data do novo processo (modo offline)"})
-            elif reaproveita and sem_citados:
+            elif reaproveita and sem_citados and mencoes:
                 falhas.append({"numero": k.split("|")[1], "obtido": "",
                                "motivo": "cache sem as menções a outros processos (modo offline)"})
             elif reaproveita:
@@ -1900,6 +1937,10 @@ def executar(a, cli: Cliente1Doc | None, setor: str, agora: datetime) -> dict:
                           "do processo novo. Só conta processo: memorando, ofício etc. ficam de fora. 'Novo processo "
                           "emitido em' é o mais recente (com o filtro de período, o mais recente dentro dele)."),
         ("Menções", resumo_mencoes),
+        ("Coluna Menções", "Todos os processos citados no texto de abertura e nos despachos deste — menção do "
+                           "1Doc, link ou número com 'processo', 'nº'… antes —, mesmo quando não dá para dizer "
+                           "se são o pai ou o filho. '(pai)': o processo de origem; '(filho)': um dos novos "
+                           "processos; '(número no texto)': citado só pelo número digitado."),
         ("Dias", "Dias corridos de calendário até a data de posição."),
     ]
     return {"regs": regs, "falhas": falhas, "params": params, "filtros": filtros}

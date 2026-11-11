@@ -214,6 +214,7 @@ def test_busca_novo_processo_por_mencao(dados, cred, monkeypatch):
     res = busca.main(["--pausa", "0", "--fase", "Elaboração", "--novo-processo", "--saida", saida], cred=cred)
     assert [r["numero"] for r in res["regs"]] == ["30.500/2026", "30.600/2026"]
     assert [r["novos_texto"] for r in res["regs"]] == ["41.000/2026 (cita este)", "39.144/2026 (citado neste)"]
+    assert [r["mencoes"] for r in res["regs"]] == ["", "39.144/2026 (filho)"]       # coluna Menções
     # a data é a de emissão do processo novo
     assert [r["novo_processo_em"].date() for r in res["regs"]] == [(hoje - timedelta(days=2)).date(),
                                                                   (hoje - timedelta(days=1)).date()]
@@ -233,6 +234,10 @@ def test_busca_novo_processo_por_mencao(dados, cred, monkeypatch):
 
     assert [r["numero"] for r in buscar("--sem-novo-processo")["regs"]] == ["30.700/2026"]
     assert [r["numero"] for r in buscar("--novo-processo-de", "-1")["regs"]] == ["30.600/2026"]
+    # a coluna Menções mostra a menção mesmo quando ela não decide pai nem filho
+    sem = buscar("--sem-mencoes", "--sem-novo-processo")
+    assert [(r["numero"], r["mencoes"]) for r in sem["regs"]] == [
+        ("30.500/2026", ""), ("30.600/2026", "39.144/2026"), ("30.700/2026", "")]
     # só a emissão normal: nenhuma das três tem o evento, e o índice não é montado
     fake.pedidos.clear()
     assert buscar("--sem-mencoes", "--novo-processo")["regs"] == []
@@ -259,10 +264,12 @@ def test_busca_novo_processo_por_mencao(dados, cred, monkeypatch):
     res = buscar("--sem-novo-processo", offline=True)
     assert res["regs"] == [] and {f["motivo"] for f in res["falhas"]} == {
         "cache sem as menções a outros processos (modo offline)"}
-    # sem o filtro de novo processo, o cache antigo serve como antes
-    assert len(buscar(offline=True)["regs"]) == 3
-    # com acesso, reabre o que não tem as menções e volta ao mesmo resultado
-    fake1doc.instalar(monkeypatch)
+    # sem o filtro de novo processo, o cache antigo serve como antes, com a lacuna anotada
+    antigo = buscar(offline=True)["regs"]
+    assert len(antigo) == 3 and all("menções não lidas" in "; ".join(r["_obs"]) for r in antigo)
+    # com acesso, reabre o que não tem as menções (mesmo sem o filtro) e volta ao mesmo resultado
+    fake = fake1doc.instalar(monkeypatch)
+    assert len(buscar()["regs"]) == 3 and fake.pedidos.count(("GET", "doc/ver")) == 5
     assert [r["numero"] for r in buscar("--sem-novo-processo")["regs"]] == ["30.700/2026"]
 
 
@@ -273,7 +280,21 @@ def _preparar_faltantes(dados, monkeypatch):
     return faltantes, fake1doc.instalar(monkeypatch)
 
 
+# Despacho com três menções que não são nem pai nem filho conferidos (a do 1Doc fica fora do texto)
+DESPACHO_COM_MENCOES = "Origem: Proc. Administrativo 28.000/2026. Ver também o processo nº 30.161/2026."
+ANEXO_COM_MENCAO = ('<a class=" pre_visualizar" data-mention="2" href="./?pg=doc/ver&amp;hash='
+                    '5476D715A594730A44C82DCD&amp;itd=3&amp;origem=emissao_anexada"><i class="icon-folder-open">'
+                    '</i> Proc. Administrativo 26.831/2026 - Abertura de Procedimento Licitatório</a>')
+
+
+def _com_mencoes(monkeypatch, h):
+    monkeypatch.setitem(fake1doc.PROCESSOS[h], "despacho", DESPACHO_COM_MENCOES)
+    monkeypatch.setitem(fake1doc.PROCESSOS[h], "anexos", ANEXO_COM_MENCAO)
+    monkeypatch.setitem(fake1doc.PROCESSOS[h], "pai", ("28.000/2026", "ZZZZ0000ZZZZ0000ZZZZ"))
+
+
 def test_faltantes(dados, cred, monkeypatch):
+    _com_mencoes(monkeypatch, "DDDD3333EEEE4444FFFF")
     faltantes, fake = _preparar_faltantes(dados, monkeypatch)
     planilha = _planilha(dados["dados"] / "acomp.xlsx", ["31.632/2026"])
     destino = faltantes.executar(planilha, None, cred)
@@ -282,6 +303,11 @@ def test_faltantes(dados, cred, monkeypatch):
     # P2 está antes da Pesquisa de Mercado e fora da planilha; P1 está na planilha
     assert [l[0] for l in linhas[1:]] == ["31.700/2026"]
     assert linhas[1][2] == "Reforma da Escola Municipal Exemplo"
+    # menções do despacho, mesmo sem saber se são pai ou filho; a origem do cabeçalho sai marcada
+    assert linhas[0][8:] == ["Menções", "Observação"]
+    assert linhas[1][8] == ("26.831/2026, 28.000/2026 (pai; número no texto), "
+                            "30.161/2026 (número no texto)")
+    assert "hash=5476D715A594730A44C82DCD" in load_workbook(destino)["Faltantes"]["I2"].hyperlink.target
     assert os.path.isfile(faltantes.ARQ_CACHE)
     # período padrão: de 1º/jan do ano mais antigo da planilha até hoje
     assert set(fake.intervalos) == {f"01/01/2026 - {date.today():%d/%m/%Y}"}
@@ -328,6 +354,7 @@ def test_faltantes_periodo_vazio(dados, cred, monkeypatch):
 
 def test_verificar_planilha(dados, cred, monkeypatch):
     from ferramentas1doc import verificar_planilha
+    _com_mencoes(monkeypatch, "AAAA1111BBBB2222CCCC")
     monkeypatch.setattr(verificar_planilha, "PAUSA_REQ", 0)
     monkeypatch.setattr(verificar_planilha, "ARQ_CACHE",
                         os.path.join(str(dados["dados"]), "hash_cache_1doc.json"))
@@ -337,10 +364,15 @@ def test_verificar_planilha(dados, cred, monkeypatch):
     linhas = _valores(destino)
     # só P1 chegou à Pesquisa de Mercado; colunas novas no fim
     assert [l[0] for l in linhas[1:]] == ["31.632/2026"]
-    assert linhas[0][5:] == ["Etapa atual (1Doc)", "Processo pai", "Processo filho", "Objeto (abertura)",
-                             "Observação"]
+    assert linhas[0][5:] == ["Etapa atual (1Doc)", "Processo pai", "Processo filho", "Menções",
+                             "Objeto (abertura)", "Observação"]
     assert linhas[1][5] == "Pesquisa de Mercado"
-    assert linhas[1][8] == "Aquisição de medicamentos para a rede municipal de saúde"
+    assert linhas[1][6] == "28.000/2026"
+    # menções do despacho, mesmo sem saber se são pai ou filho; a origem do cabeçalho sai marcada
+    assert linhas[1][8] == ("26.831/2026, 28.000/2026 (pai; número no texto), "
+                            "30.161/2026 (número no texto)")
+    assert "hash=5476D715A594730A44C82DCD" in load_workbook(destino).active["I2"].hyperlink.target
+    assert linhas[1][9] == "Aquisição de medicamentos para a rede municipal de saúde"
     cache = json.load(open(verificar_planilha.ARQ_CACHE, encoding="utf-8"))
     assert cache["31.632/2026"] == "AAAA1111BBBB2222CCCC"       # localizado por HTTP e guardado
 
