@@ -130,6 +130,27 @@ def test_busca_campos_de_etapa_com_lista(janela, dados):
         c.set("")
 
 
+def test_busca_novo_processo_no_formulario(janela):
+    from ferramentas1doc import busca_argv
+    aba = janela.abas[1]
+    assert [str(v) for v in aba.combo_novo["values"]] == ["", "Sim", "Não"]
+    assert str(aba.combo_novo["state"]) == "readonly"
+    assert aba.combo_novo.master.cget("text") == "Datas e mudanças de etapa"
+    assert {"novo_processo_de", "novo_processo_ate"} <= set(aba.botoes_data)        # com calendário
+    aba.caixas["entrada"].set(True)
+    try:
+        aba.v["novo_processo"].set("Sim")
+        aba.v["novo_processo_de"].set("01/11/2026")
+        argv = busca_argv.montar_argv(aba.formulario())
+        assert "--novo-processo" in argv and argv[argv.index("--novo-processo-de") + 1] == "01/11/2026"
+        aba.v["novo_processo"].set("Não")
+        janela._executar(aba)
+        assert janela.executando is None and "não combina" in janela.avisos[0][1]
+    finally:
+        for chave in ("novo_processo", "novo_processo_de"):
+            aba.v[chave].set("")
+
+
 def test_busca_com_formulario_invalido(janela):
     aba = janela.abas[1]
     for v in aba.caixas.values():
@@ -283,7 +304,7 @@ def test_calendario_escolhe_o_dia_no_campo(janela):
     j.notebook.select(1)
     aba = j.abas[1]
     assert set(aba.botoes_data) == {"emissao_de", "emissao_ate", "mudanca_de", "mudanca_ate", "entrada_de",
-                                    "entrada_ate"}
+                                    "entrada_ate", "novo_processo_de", "novo_processo_ate"}
     var = aba.v["emissao_de"]
     try:
         var.set("05/03/2025")

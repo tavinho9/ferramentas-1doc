@@ -129,6 +129,33 @@ def test_campos_de_etapa_viram_opcoes_da_busca():
                         "--etapa", "Consulta Orçamentária"]
 
 
+def test_montar_argv_novo_processo():
+    base = {"caixas": ["entrada"]}
+    argv = busca_argv.montar_argv({**base, "novo_processo": "Sim", "novo_processo_de": "01/11/2026",
+                                   "novo_processo_ate": "-1"})
+    assert argv[2:] == ["--novo-processo-de", "01/11/2026", "--novo-processo-ate", "-1", "--novo-processo"]
+    assert busca_argv.validar(argv) is None
+    assert busca_argv.montar_argv({**base, "novo_processo": "Não"})[2:] == ["--sem-novo-processo"]
+    assert busca_argv.montar_argv({**base, "novo_processo_de": "hoje"})[2:] == ["--novo-processo-de", "hoje"]
+    with pytest.raises(busca_argv.FormularioInvalido, match="não combina"):
+        busca_argv.montar_argv({**base, "novo_processo": "Não", "novo_processo_ate": "hoje"})
+    # a mesma regra vale para quem digita as opções
+    assert "não combina" in busca_argv.validar(["--sem-novo-processo", "--novo-processo"])
+    assert "data inválida" in busca_argv.validar(["--novo-processo-ate", "31/02/2026"])
+
+
+def test_novo_processo_so_conta_processo():
+    from ferramentas1doc import busca
+    det = {"emissoes": [{"numero": "2/2026", "tipo": "Memorando", "data": "2026-11-05T10:00:00"},
+                        {"numero": "9/2026", "tipo": "Proc. Administrativo", "data": "2026-11-06T09:00:00"},
+                        {"numero": "8/2026", "tipo": "Proc. Administrativo", "data": "2026-11-01T09:00:00"}],
+           "derivados": ["2/2026", "9/2026", "8/2026"]}
+    assert [n["numero"] for n in busca.novos_processos(det)] == ["8/2026", "9/2026"]   # do mais antigo
+    # detalhe gravado antes desta leitura: só os números, sem data
+    assert [(n["numero"], n["data"]) for n in busca.novos_processos({"derivados": ["2/2026"]})] == [("2/2026", None)]
+    assert busca.novos_processos({}) == []
+
+
 def test_montar_argv_erros():
     with pytest.raises(busca_argv.FormularioInvalido, match="caixa"):
         busca_argv.montar_argv({"caixas": []})

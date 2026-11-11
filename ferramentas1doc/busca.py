@@ -25,8 +25,10 @@ Como funciona
      rótulo dos despachos "via etapa" (.despacho_tit, ícone ⏩, truncado). A
      entrada na etapa atual é conferida contra o "Está aqui N …" do quadro; se
      divergir além da granularidade do rótulo, prevalece o quadro.
-  5. Filtros e saída — .xlsx com abas Resultado, Transições e Parâmetros
-     (CSV opcional) e um resumo no terminal.
+  5. Novo processo — os eventos "emitiu o Proc. Administrativo N/AAAA a partir deste
+     documento" da linha do tempo dizem que processos saíram deste e quando.
+  6. Filtros e saída — .xlsx com abas Resultado, Transições, Novos processos e
+     Parâmetros (CSV opcional) e um resumo no terminal.
 
 Dependências:  pip install websocket-client requests beautifulsoup4 openpyxl
                (lxml é opcional e acelera a leitura das páginas)
@@ -510,13 +512,14 @@ def _data_tc(el) -> datetime | None:
     return datetime.fromtimestamp(int(v), TZ_BR).replace(tzinfo=None) if v.isdigit() else None
 
 
-def _eventos(soup) -> tuple[list[dict], list[str]]:
+def _eventos(soup) -> tuple[list[dict], list[str], list[dict]]:
     """Linha do tempo, notificações de sistema (.desp_notificacao .marcou):
       - 'Mudança de etapa' (.marcou_fast-forward): dois itens com o mesmo carimbo,
         'mudou da etapa <strong>X</strong>.' e 'para <strong>Y</strong>.'
       - 'emitiu o Proc. Administrativo N/AAAA a partir deste documento' (processo derivado).
-    Devolve (mudanças [{data, de, para, autor, setor}], derivados ['N/AAAA', ...])."""
-    brutos, derivados = [], []
+    Devolve (mudanças [{data, de, para, autor, setor}], derivados ['N/AAAA', ...],
+    emissões [{numero, tipo, data, autor, setor, hash}] dos derivados, na ordem da página)."""
+    brutos, derivados, emissoes = [], [], []
     for i, m in enumerate(soup.select(".desp_notificacao .marcou")):
         quem = txt(m.select_one(".marcou_quem"))
         md = RE_DERIVADO.search(quem)
@@ -524,10 +527,15 @@ def _eventos(soup) -> tuple[list[dict], list[str]]:
             n = norm_numero(md[2])
             if n and n not in derivados:
                 derivados.append(n)
+                a = m.select_one(".marcou_quem a[href]")
+                h = (parse_qs(urlparse(a["href"]).query).get("hash") or [""])[0] if a else ""
+                emissoes.append({"numero": n, "tipo": md[1].strip(), "data": iso(_data_hora_evento(m)),
+                                 "autor": txt(m.select_one(".marcou_nome")),
+                                 "setor": txt(m.select_one(".badge_env")), "hash": h.upper()})
         if "marcou_fast-forward" not in (m.get("class") or []):
             continue
         forte = txt(m.select_one(".marcou_quem strong")) or re.sub(r"^(mudou da etapa|para)\s*|\s*\.$", "", quem)
-        dt = _data_tc(m) or dt_br(txt(m.select_one(".despacho_data")))
+        dt = _data_hora_evento(m)
         bd = m.select_one(".badge_env")
         brutos.append({"_i": i, "data": dt, "tipo": "de" if re.match(r"mudou da etapa", quem, re.I) else
                        "para" if re.match(r"para\b", quem, re.I) else "?", "etapa": forte,
@@ -549,7 +557,12 @@ def _eventos(soup) -> tuple[list[dict], list[str]]:
             pend = None
     if pend:
         mud.append({**pend, "para": ""})
-    return mud, derivados
+    return mud, derivados, emissoes
+
+
+def _data_hora_evento(m) -> datetime | None:
+    """Carimbo do contêiner da linha do tempo; sem ele, a data escrita no evento."""
+    return _data_tc(m) or dt_br(txt(m.select_one(".despacho_data")))
 
 
 def _despachos(soup) -> list[dict]:
@@ -779,7 +792,7 @@ def parse_detalhe(html: str, agora: datetime) -> dict:
         if x.get("title") != "Prioridade" and txt(x)))
 
     desp = _despachos(soup)
-    eventos, derivados = _eventos(soup)
+    eventos, derivados, emissoes = _eventos(soup)
     trans = _transicoes(desp, titulos, eventos, emissao)
     perm = permanencia(desde) if desde else None
     entrada, entrada_fonte, entrada_obs = _entrada_etapa(etapa, atipico, titulos, trans, perm, emissao, agora)
@@ -800,7 +813,7 @@ def parse_detalhe(html: str, agora: datetime) -> dict:
         "etapa": etapa, "fase": fase, "setor_etapa": setor_etapa, "setor_etapa_ids": ids_etapa,
         "permanencia": re.sub(r"^Est[áa] aqui\s*", "", desde, flags=re.I), "atipico": atipico,
         "entrada": iso(entrada), "entrada_fonte": entrada_fonte, "entrada_obs": entrada_obs,
-        "status_setor": status_setor, "derivados": derivados,
+        "status_setor": status_setor, "derivados": derivados, "emissoes": emissoes,
         "n_despachos": len(desp), "despachos": desp[-GUARDAR_DESPACHOS:], "transicoes": trans,
         "coletado_em": iso(agora), "versao": VERSAO,
     }
@@ -902,6 +915,8 @@ def detalhar_um(cli: Cliente1Doc, numero: str, itd: str, item: dict | None, agor
         return None, {"numero": numero, "motivo": "sem etapa nem rótulo utilizável", "obtido": ""}
     det["itd"] = itd
     det["url"] = f"{cli.base}?pg=doc/ver&hash={det['hash'] or h}&itd={itd}" if (det["hash"] or h) else ""
+    for e in det["emissoes"]:
+        e["url"] = f"{cli.base}?pg=doc/ver&hash={e['hash']}&itd={itd}" if e["hash"] else ""
     det["_ult_mov_lista"] = (item or {}).get("ult_mov", "")
     return det, None
 
@@ -987,11 +1002,31 @@ def indice_alvo(alvo: str, titulos: list[str]):
     return None
 
 
+def eh_processo(tipo: str) -> bool:
+    """Tipo de documento de uma emissão: 'Proc. Administrativo' conta como processo novo;
+    memorando, ofício etc. emitidos a partir do processo, não."""
+    return normtxt(tipo).startswith("proc")
+
+
+def novos_processos(det: dict) -> list[dict]:
+    """Processos emitidos a partir deste (eventos 'emitiu o … a partir deste documento'),
+    com a data já lida, do mais antigo ao mais recente. Detalhe gravado no cache antes desta
+    leitura só tem os números ('derivados'): entram sem data nem tipo."""
+    if "emissoes" in det:
+        novos = [{**e, "data": de_iso(e.get("data"))} for e in det["emissoes"] or []
+                 if eh_processo(e.get("tipo", ""))]
+    else:
+        novos = [{"numero": n, "tipo": "", "data": None, "autor": "", "setor": "", "hash": ""}
+                 for n in det.get("derivados") or []]
+    return sorted(novos, key=lambda n: n["data"] or datetime.min)
+
+
 def consolidar(item: dict | None, det: dict | None, agora: datetime, op) -> dict:
     item, det = item or {}, det or {}
     desp = det.get("despachos") or []
     ult = desp[-1] if desp else {}
     trans = [{**t, "data": de_iso(t["data"])} for t in det.get("transicoes", [])]
+    novos = novos_processos(det)
     r = {
         "numero": det.get("numero") or item.get("numero"),
         "itd": det.get("itd") or item.get("itd", ""),
@@ -1020,6 +1055,9 @@ def consolidar(item: dict | None, det: dict | None, agora: datetime, op) -> dict
         "status_setor": det.get("status_setor", ""),
         "pai": det.get("pai", ""),
         "derivados": ", ".join(det.get("derivados") or []),
+        "novos": novos,
+        # o mais recente; com o filtro de período, o mais recente dentro dele (ver montar_filtros)
+        "novo_processo_em": max((n["data"] for n in novos if n["data"]), default=None),
         "caixa": item.get("caixa", ""),
         "transicoes": trans,
         "despachos": desp,
@@ -1126,6 +1164,21 @@ def montar_filtros(a) -> list[Filtro]:
                                    and (not orig or contem(t["de"], orig))]
             return bool(r["_trans_periodo"])
         F.append(Filtro(desc, "geral", "detalhe", mudou))
+    if a.novo_processo or a.novo_processo_de or a.novo_processo_ate:
+        de, ate = a.novo_processo_de, a.novo_processo_ate
+        periodo = bool(de or ate)
+
+        def emitiu(r):
+            r["_novos_periodo"] = [n for n in r["novos"] if not periodo or (
+                n["data"] is not None and (not de or n["data"] >= de) and (not ate or n["data"] <= ate))]
+            if periodo and r["_novos_periodo"]:
+                r["novo_processo_em"] = max(n["data"] for n in r["_novos_periodo"])
+            return bool(r["_novos_periodo"])
+        F.append(Filtro("emitiu novo processo a partir dele" + (f" {_periodo(de, ate)}" if periodo else ""),
+                        "geral", "detalhe", emitiu))
+    if a.sem_novo_processo:
+        F.append(Filtro("não emitiu novo processo a partir dele", "geral", "detalhe",
+                        lambda r: not r["novos"]))
     if a.emissao_de or a.emissao_ate:
         de, ate = a.emissao_de, a.emissao_ate
         F.append(Filtro(f"emissão {_periodo(de, ate)}", "geral", "lista",
@@ -1227,7 +1280,8 @@ COLUNAS = [
     ("Histórico de etapas", "historico", 60), ("Nº mudanças", "n_mudancas", 9),
     ("Cita setor-alvo", "cita_alvo", 10), ("Observação", "obs", 45), ("Situação", "situacao", 12),
     ("Status no meu setor", "status_setor", 16), ("Processo de origem", "pai", 13),
-    ("Processos derivados", "derivados", 16), ("Setores envolvidos (caixa)", "para", 34), ("Caixa", "caixa", 14),
+    ("Processos derivados", "derivados", 16), ("Novo processo emitido em", "novo_processo_em", 17),
+    ("Setores envolvidos (caixa)", "para", 34), ("Caixa", "caixa", 14),
 ]
 CAMPOS_SIM_NAO = ("cita_alvo", "etapa_meu_setor")
 
@@ -1242,7 +1296,7 @@ def _valor(r, campo):
 
 
 def escrever_xlsx(caminho: str, regs: list[dict], params: list[tuple[str, str]], falhas: list[dict],
-                  mostrar_cita: bool, marcar_periodo: bool):
+                  mostrar_cita: bool, marcar_periodo: bool, marcar_novo: bool = False):
     from openpyxl import Workbook
     from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
     from openpyxl.styles import Alignment, Font, PatternFill
@@ -1306,6 +1360,29 @@ def escrever_xlsx(caminho: str, regs: list[dict], params: list[tuple[str, str]],
                     c.number_format = fmt_dh
             lin += 1
     wt.auto_filter.ref = f"A1:{get_column_letter(len(tcols))}{max(1, lin - 1)}"
+
+    # Um processo novo por linha (o processo da aba Resultado é o de origem)
+    wn = wb.create_sheet("Novos processos")
+    ncols = [("Nº Processo", "numero", 13), ("Objeto", "assunto", 45), ("Novo processo", "novo", 13),
+             ("Emitido em", "data", 17), ("Autor", "autor", 24), ("Setor", "setor", 18),
+             ("Etapa atual do processo", "etapa_atual", 26)]
+    if marcar_novo:
+        ncols.insert(4, ("No período filtrado?", "no_periodo", 11))
+    cabecalho(wn, ncols)
+    lin = 2
+    for r in regs:
+        no_per = {id(n) for n in r.get("_novos_periodo", [])}
+        for n in r["novos"]:
+            linha = {**n, "numero": r["numero"], "assunto": r["assunto"], "novo": n["numero"],
+                     "etapa_atual": r["etapa"], "no_periodo": "sim" if id(n) in no_per else "não"}
+            for j, (_, campo, _) in enumerate(ncols, 1):
+                c = wn.cell(row=lin, column=j, value=limpo(linha.get(campo)))
+                if isinstance(linha.get(campo), datetime):
+                    c.number_format = fmt_dh
+                if campo == "novo" and n.get("url"):
+                    c.hyperlink, c.font = n["url"], Font(color="0563C1", underline="single")
+            lin += 1
+    wn.auto_filter.ref = f"A1:{get_column_letter(len(ncols))}{max(1, lin - 1)}"
 
     wp = wb.create_sheet("Parâmetros")
     wp.column_dimensions["A"].width, wp.column_dimensions["B"].width = 30, 110
@@ -1418,16 +1495,24 @@ def executar(a, cli: Cliente1Doc | None, setor: str, agora: datetime) -> dict:
     if a.sem_detalhe and precisa:
         sys.exit("Os filtros pedidos exigem abrir os processos; retire --sem-detalhe.")
     dets, falhas, do_cache = {}, [], 0
+    periodo_novo = bool(a.novo_processo_de or a.novo_processo_ate)
     if not a.sem_detalhe:
         pedidos = []
         for k in candidatos:
             item = lista.get(k)
             c = cache["det"].get(k)
+            # Detalhe gravado antes de a busca ler as emissões, com processo derivado: falta a
+            # data do processo novo. Reabre (são poucos); no --offline, só pesa no filtro de período.
+            sem_data_novo = bool(c) and "emissoes" not in c and bool(c.get("derivados"))
             # Reaproveita só se a listagem é de agora e a última movimentação não mudou
             # (mudança de etapa sempre gera movimentação).
             reaproveita = c and not a.refazer and (a.offline or (
-                lista_fresca and item and item.get("ult_mov") and c.get("_ult_mov_lista") == item.get("ult_mov")))
-            if reaproveita:
+                not sem_data_novo and lista_fresca and item and item.get("ult_mov")
+                and c.get("_ult_mov_lista") == item.get("ult_mov")))
+            if reaproveita and sem_data_novo and periodo_novo:
+                falhas.append({"numero": k.split("|")[1], "obtido": "",
+                               "motivo": "cache sem a data do novo processo (modo offline)"})
+            elif reaproveita:
                 dets[k] = c
                 do_cache += 1
             elif a.offline:
@@ -1481,6 +1566,10 @@ def executar(a, cli: Cliente1Doc | None, setor: str, agora: datetime) -> dict:
                              "Em 'Saiu – Próxima' (Etapa Final não exibe 'Está aqui'), a data é a da entrada na Próxima."),
         ("Setores envolvidos", "Coluna 'Para' da caixa, com os setores escondidos no '+N' e nos badges truncados. "
                                "Não é o setor que está com o processo: para isso, veja 'Últ. despacho — para'."),
+        ("Novo processo", "Evento 'emitiu o Proc. Administrativo N/AAAA a partir deste documento' da linha do "
+                          "tempo, com a data/hora dele. Só conta processo: memorando, ofício etc. emitidos a partir "
+                          "do processo ficam de fora. 'Novo processo emitido em' é o mais recente (com o filtro de "
+                          "período, o mais recente dentro dele); a aba 'Novos processos' lista todos."),
         ("Dias", "Dias corridos de calendário até a data de posição."),
     ]
     return {"regs": regs, "falhas": falhas, "params": params, "filtros": filtros}
@@ -1504,6 +1593,10 @@ def montar_parser() -> argparse.ArgumentParser:
     --fase Abertura --dias-etapa-min 15 --ordenar prioridade,dias_etapa:desc
   Regra da CPPFI (antes da Pesquisa de Mercado, ou depois mas com o último despacho citando a CPPFI):
     --antes-de "Pesquisa de Mercado" --excecao-cita-setor SPOT-DCL-GP-CPPFI --pessoa "João Otávio"
+  Emitiram novo processo (ex.: a Abertura saída da Fase Preparatória) em novembro, em todas as caixas:
+    --caixas todas --novo-processo-de 01/11/2026 --novo-processo-ate 30/11/2026
+  Na Etapa Final da Elaboração e ainda sem novo processo emitido:
+    --fase Elaboração --etapa "Etapa Final" --sem-novo-processo
   Processos de uma planilha/lista, sem varrer as caixas:
     --numeros-arquivo acompanhamento.xlsx
   Refiltrar sem acessar o 1Doc (usa o cache da última coleta):
@@ -1564,6 +1657,12 @@ filtros diferentes = E.""")
     g.add_argument("--sem-mov-min", type=int, metavar="N", help="dias sem movimentação ≥ N")
     g.add_argument("--sem-mov-max", type=int, metavar="N")
 
+    g = p.add_argument_group("Novo processo emitido a partir dele (evento 'emitiu o Proc. Administrativo …')")
+    g.add_argument("--novo-processo", action="store_true", help="emitiu ao menos um novo processo")
+    g.add_argument("--novo-processo-de", metavar="DATA", help="…emitido a partir de DATA")
+    g.add_argument("--novo-processo-ate", metavar="DATA", help="…emitido até DATA")
+    g.add_argument("--sem-novo-processo", action="store_true", help="não emitiu nenhum novo processo")
+
     g = p.add_argument_group("Outros filtros")
     g.add_argument("--prioridade", action="append", metavar="P", help="Urgente, Alta, Média, Baixa (vírgula)")
     g.add_argument("--com", action="append", metavar="COD",
@@ -1584,7 +1683,7 @@ filtros diferentes = E.""")
     g.add_argument("--sem-xlsx", action="store_true")
     g.add_argument("--ordenar", default="fase,etapa,dias_etapa:desc",
                    help="campos: numero, emissao, prioridade, fase, etapa, entrada, dias_etapa, ult_mov, "
-                        "dias_sem_mov (sufixo :desc). Padrão: %(default)s")
+                        "dias_sem_mov, novo_processo_em (sufixo :desc). Padrão: %(default)s")
     g.add_argument("--mostrar", type=int, default=30, metavar="N", help="linhas no terminal")
     g.add_argument("--cache", default=None, help="cache de detalhes (padrão: 1doc_cache.json na pasta de dados)")
     g.add_argument("--sem-cache", action="store_true")
@@ -1605,8 +1704,8 @@ def tipo_fase(s: str) -> str:
     raise argparse.ArgumentTypeError("fase: Elaboração ou Abertura")
 
 
-DATAS_INICIO = ("entrada_de", "mudanca_de", "emissao_de", "ult_mov_de")
-DATAS_FIM = ("entrada_ate", "mudanca_ate", "emissao_ate", "ult_mov_ate")
+DATAS_INICIO = ("entrada_de", "mudanca_de", "emissao_de", "ult_mov_de", "novo_processo_de")
+DATAS_FIM = ("entrada_ate", "mudanca_ate", "emissao_ate", "ult_mov_ate", "novo_processo_ate")
 
 
 def normalizar_args(a, agora: datetime | None = None):
@@ -1625,6 +1724,8 @@ def normalizar_args(a, agora: datetime | None = None):
         setattr(a, nome, [x.strip() for x in (getattr(a, nome) or []) if x and x.strip()])
     if a.offline and a.sem_cache:
         sys.exit("--offline precisa do cache; retire --sem-cache.")
+    if a.sem_novo_processo and (a.novo_processo or a.novo_processo_de or a.novo_processo_ate):
+        sys.exit("--sem-novo-processo não combina com --novo-processo, --novo-processo-de ou --novo-processo-ate.")
     if not a.cache:
         a.cache = caminhos.arquivo_dados("1doc_cache.json")
     return a
@@ -1655,10 +1756,11 @@ def main(argv=None, cred=None):
               + ", ".join(f"{f['numero']} ({f['motivo']})" for f in res["falhas"][:15]))
     mostrar_cita = bool(a.cita_setor or a.excecao_cita_setor or a.pessoa)
     marcar = bool(a.mudanca_de or a.mudanca_ate or a.mudanca_para or a.mudanca_origem)
+    marcar_novo = bool(a.novo_processo_de or a.novo_processo_ate)
     res["arquivo"] = None
     if not a.sem_xlsx:
         saida = a.saida or os.path.join(config.pasta_saida(), f"Busca 1Doc {agora:%d-%m-%Y %Hh%M}.xlsx")
-        escrever_xlsx(saida, res["regs"], res["params"], res["falhas"], mostrar_cita, marcar)
+        escrever_xlsx(saida, res["regs"], res["params"], res["falhas"], mostrar_cita, marcar, marcar_novo)
         res["arquivo"] = os.path.abspath(saida)
         print(f"\nPlanilha: {res['arquivo']}")
         if a.abrir:
