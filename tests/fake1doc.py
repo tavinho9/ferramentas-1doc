@@ -6,10 +6,13 @@ roteador abaixo, que responde com HTML no formato da interface clássica do
 
   P1 31.632/2026 — Abertura, etapa atual "Pesquisa de Mercado" (há 2 horas)
   P2 31.700/2026 — Abertura, etapa atual "Validação de Requisição" (há 3 dias)
+
+Um processo pode ganhar "emissoes": [(tipo, número, hash, datetime)], que viram
+eventos "emitiu o <tipo> <número> a partir deste documento" na linha do tempo.
 """
 
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from urllib.parse import parse_qs, urlparse
 
 import requests
@@ -91,9 +94,22 @@ def kanban(p, modelo=False):
     return '<div class="workflow_v2_kanban">' + "".join(blocos) + "</div>"
 
 
+def evento_emissao(tipo, numero, hash_, quando):
+    """Evento da linha do tempo de um documento emitido a partir do processo. O
+    carimbo é o instante de `quando` no horário de Brasília, como o do 1Doc."""
+    mk = int(quando.replace(tzinfo=timezone(timedelta(hours=-3))).timestamp())
+    return f"""<div class="timeline_conteudo" data-datamk="{mk}">
+<div class="desp_notificacao"><div class="marcou marcou_file">
+  <span class="marcou_nome">Maria da Silva</span> <span class="badge_env">SS-DAF</span>
+  <small class="marcou_quem">emitiu o <a href="./?pg=doc/ver&hash={hash_}&origem=emissao_evento_base">{tipo}
+    {numero}</a> a partir deste documento.</small>
+</div></div></div>"""
+
+
 def detalhe(h):
     p = PROCESSOS[h]
     mk = int(time.mktime(datetime.combine(HOJE, datetime.min.time()).replace(hour=9, minute=15).timetuple()))
+    eventos = "".join(evento_emissao(*e) for e in p.get("emissoes", []))
     return f"""<html><body>{LOGADO}
 <input type="hidden" id="nome_em" value="Proc. Administrativo {p['numero']}">
 <input type="hidden" id="hash_emissao" value="{h}">
@@ -116,6 +132,7 @@ def detalhe(h):
   <div class="rf_de"><span class="badge_env">SS-DAF</span></div>
 </th></tr><tr><td class="celula_despacho"><div class="texto_original">Encaminho para análise.</div></td></tr>
 </table></div>
+{eventos}
 <div class="tm_conteudo"><div id="parent_wa" data-current_idph="1">{kanban(p, modelo=True)}</div></div>
 </body></html>"""
 

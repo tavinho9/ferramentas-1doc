@@ -123,8 +123,9 @@ class AbaBusca(ttk.Frame):
 
     def __init__(self, pai):
         super().__init__(pai)
-        _descricao(self, "Busca nas caixas do setor por etapa, fase, datas e mudanças de etapa. Gera uma "
-                         "planilha com as abas Resultado, Transições e Parâmetros. Textos: sem diferença de "
+        _descricao(self, "Busca nas caixas do setor por etapa, fase, datas, mudanças de etapa e novo processo "
+                         "emitido a partir do processo. Gera uma planilha com as abas Resultado, Transições, "
+                         "Novos processos e Parâmetros. Textos: sem diferença de "
                          "maiúsculas e acentos, \"contém\"; vários valores num campo, separados por ';', "
                          "valem como OU. Etapas: escolha na lista (ou digite parte do nome); para juntar "
                          "outra, digite ';' depois da primeira e escolha de novo. A lista traz o fluxo da "
@@ -180,9 +181,17 @@ class AbaBusca(ttk.Frame):
         self._campo_etapa(d, 3, 0, "mudanca_origem", "…saindo da etapa:", 24, span=3)
         self._campo(d, 4, 0, "entrada_de", "Entrou na etapa atual de:", 11, data=True)
         self._campo(d, 4, 2, "entrada_ate", "até:", 11, data=True)
-        self._campo(d, 5, 0, "sem_mov_min", "Parado há (dias), mín.:", 6)
+        ttk.Label(d, text="Emitiu novo processo:").grid(row=5, column=0, sticky="w", padx=(8, 4), pady=2)
+        self.v["novo_processo"] = tk.StringVar()
+        self.combo_novo = ttk.Combobox(d, textvariable=self.v["novo_processo"],
+                                       values=("", *busca_argv.NOVO_PROCESSO), width=6, state="readonly")
+        self.combo_novo.grid(row=5, column=1, sticky="w", pady=2)
+        ttk.Label(d, text="a partir dele", foreground="#777").grid(row=5, column=2, columnspan=2, sticky="w")
+        self._campo(d, 6, 0, "novo_processo_de", "…emitido de:", 11, data=True)
+        self._campo(d, 6, 2, "novo_processo_ate", "até:", 11, data=True)
+        self._campo(d, 7, 0, "sem_mov_min", "Parado há (dias), mín.:", 6)
         self.dica_datas = ttk.Label(d, text=busca_argv.DICA_DATAS, foreground="#777", justify="left")
-        self.dica_datas.grid(row=6, column=0, columnspan=4, sticky="w", padx=8, pady=(4, 2))
+        self.dica_datas.grid(row=8, column=0, columnspan=4, sticky="w", padx=8, pady=(4, 2))
 
         # Outros
         o = ttk.LabelFrame(corpo, text="Outros")

@@ -6,7 +6,7 @@ Prefeitura de Montes Claros numa janela só:
 | Aba | Script de origem | O que faz |
 |---|---|---|
 | **Processos do dia** | `processos_do_dia_todos_1doc.py` | Processos emitidos num dia, com a etapa atual → `processos novos DD.MM.xlsx` e `processos_do_dia.json` |
-| **Busca** | `busca_1doc.py` | Busca por etapa, fase, datas e mudanças de etapa → `Busca 1Doc ….xlsx` |
+| **Busca** | `busca_1doc.py` | Busca por etapa, fase, datas, mudanças de etapa e novo processo emitido → `Busca 1Doc ….xlsx` |
 | **Faltantes na planilha** | `verificar_faltantes_1doc.py` | Processos emitidos no período escolhido, antes da Pesquisa de Mercado, que não estão na planilha de acompanhamento → `<planilha>_faltantes_….xlsx` |
 | **Verificar planilha** | `verificar_planilha_unificada_1doc.py` | Processos da planilha que já chegaram à Pesquisa de Mercado → `<planilha>_verificada_….xlsx` |
 
@@ -75,6 +75,19 @@ traz o fluxo da Abertura e as etapas dos quadros que as buscas anteriores já
 leram, então cresce com o uso. Ainda dá para digitar parte do nome. Para juntar
 mais de uma etapa no mesmo campo, digite `;` depois da primeira e escolha a
 próxima na lista.
+
+Ainda na **Busca**, **Emitiu novo processo** separa os processos de onde já
+saiu um novo Proc. Administrativo (por exemplo, a Abertura emitida a partir
+da Fase Preparatória): *Sim* fica só com eles, *Não* fica só com os que ainda
+não emitiram nenhum. Em **…emitido de / até** dá para pedir que o novo
+processo tenha sido emitido num período (com as datas, vale *Sim*). A data
+vem do evento "emitiu o Proc. Administrativo N/AAAA a partir deste
+documento" da linha do tempo; memorandos, ofícios etc. emitidos do processo
+não contam. A planilha ganha a coluna *Novo processo emitido em* (o mais
+recente; com período, o mais recente dentro dele) e a aba *Novos
+processos*, com cada processo novo, a data, quem emitiu e o link para
+abri-lo. Na linha de comando: `--novo-processo`, `--sem-novo-processo`,
+`--novo-processo-de` e `--novo-processo-ate`.
 
 Os filtros mais usados têm campo próprio. Os demais (por
 exemplo `--setor-etapa`, `--cita-setor`, `--ordenar`) vão em **Outras

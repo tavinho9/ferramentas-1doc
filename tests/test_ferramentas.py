@@ -7,7 +7,7 @@ resultado nos dois processos de exemplo.
 
 import json
 import os
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
 
 import pytest
 from openpyxl import Workbook, load_workbook
@@ -91,6 +91,64 @@ def test_busca(dados, cred, monkeypatch):
     fake1doc.instalar(monkeypatch, logado=False)
     res2 = busca.main(["--offline", "--antes-de", "Pesquisa de Mercado", "--sem-xlsx"])
     assert [r["numero"] for r in res2["regs"]] == ["31.700/2026"]
+
+
+def test_busca_novo_processo(dados, cred, monkeypatch):
+    from ferramentas1doc import busca, busca_argv
+    tres_dias = datetime.combine(date.today() - timedelta(days=3), time(14, 30))
+    monkeypatch.setitem(fake1doc.PROCESSOS["AAAA1111BBBB2222CCCC"], "emissoes", [
+        ("Proc. Administrativo", "40.001/2026", "9999AAAA0000BBBB1111", tres_dias),
+        ("Memorando", "512/2026", "8888CCCC9999DDDD0000", datetime.combine(date.today(), time(8, 0)))])
+    fake = fake1doc.instalar(monkeypatch)
+    argv = busca_argv.montar_argv({"caixas": ["entrada"], "novo_processo": "Sim"}, pasta_saida=str(dados["saida"]))
+    res = busca.main(argv + ["--pausa", "0"], cred=cred)
+    assert [r["numero"] for r in res["regs"]] == ["31.632/2026"]
+    assert res["regs"][0]["novo_processo_em"] == tres_dias
+    assert res["regs"][0]["derivados"] == "40.001/2026, 512/2026"   # a coluna de antes segue com tudo
+    linhas = _valores(res["arquivo"], "Resultado")
+    assert linhas[1][linhas[0].index("Novo processo emitido em")] == tres_dias
+    # só o processo: o memorando emitido a partir dele fica de fora
+    assert _valores(res["arquivo"], "Novos processos") == [
+        ["Nº Processo", "Objeto", "Novo processo", "Emitido em", "Autor", "Setor", "Etapa atual do processo"],
+        ["31.632/2026", "Aquisição de medicamentos", "40.001/2026", tres_dias, "Maria da Silva", "SS-DAF",
+         "Pesquisa de Mercado"]]
+    link = load_workbook(res["arquivo"])["Novos processos"]["C2"].hyperlink.target
+    assert "hash=9999AAAA0000BBBB1111" in link
+    assert "emitiu novo processo a partir dele" in dict(res["params"])["Filtros"]
+
+    fake1doc.instalar(monkeypatch, logado=False)
+
+    def offline(*opcoes):
+        return busca.main(["--offline", "--sem-xlsx", *opcoes])
+
+    assert [r["numero"] for r in offline("--novo-processo-de", "-5", "--novo-processo-ate", "ontem")["regs"]] \
+        == ["31.632/2026"]
+    assert offline("--novo-processo-de", "hoje")["regs"] == []       # o de hoje é memorando, não processo
+    assert [r["numero"] for r in offline("--sem-novo-processo")["regs"]] == ["31.700/2026"]
+    # com período, a aba Novos processos diz quais caíram nele
+    saida = os.path.join(str(dados["saida"]), "periodo.xlsx")
+    busca.main(["--offline", "--saida", saida, "--novo-processo-de", "-5"])
+    assert [l[4] for l in _valores(saida, "Novos processos")] == ["No período filtrado?", "sim"]
+
+    # Cache gravado antes de a busca ler as emissões (só com os números em "derivados")
+    arq = os.path.join(str(dados["dados"]), "1doc_cache.json")
+    with open(arq, encoding="utf-8") as f:
+        cache = json.load(f)
+    for det in cache["det"].values():
+        del det["emissoes"]
+    with open(arq, "w", encoding="utf-8") as f:
+        json.dump(cache, f)
+    # sem acessar o 1Doc, o período não tem como ser conferido: lacuna declarada, não chute
+    res = offline("--novo-processo-de", "-5")
+    assert res["regs"] == []
+    assert [(f["numero"], f["motivo"]) for f in res["falhas"]] == [
+        ("31.632/2026", "cache sem a data do novo processo (modo offline)")]
+    assert [r["numero"] for r in offline("--novo-processo")["regs"]] == ["31.632/2026"]
+    # com acesso, só o processo que tem derivado é reaberto; o outro vem do cache
+    fake = fake1doc.instalar(monkeypatch)
+    res = busca.main(["--novo-processo-de", "-5", "--sem-xlsx", "--pausa", "0"], cred=cred)
+    assert [r["numero"] for r in res["regs"]] == ["31.632/2026"] and not res["falhas"]
+    assert fake.pedidos.count(("GET", "doc/ver")) == 1
 
 
 def _preparar_faltantes(dados, monkeypatch):

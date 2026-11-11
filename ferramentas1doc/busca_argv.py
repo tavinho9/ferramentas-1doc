@@ -53,6 +53,8 @@ TEXTOS = {
     "mudanca_ate": "--mudanca-ate",
     "entrada_de": "--entrada-de",
     "entrada_ate": "--entrada-ate",
+    "novo_processo_de": "--novo-processo-de",
+    "novo_processo_ate": "--novo-processo-ate",
     "numeros_arquivo": "--numeros-arquivo",
 }
 INTEIROS = {
@@ -60,6 +62,8 @@ INTEIROS = {
     "dias_etapa_max": "--dias-etapa-max",
     "sem_mov_min": "--sem-mov-min",
 }
+# "Emitiu novo processo:" (lista Sim/Não; vazio = tanto faz) → opção
+NOVO_PROCESSO = {"Sim": "--novo-processo", "Não": "--sem-novo-processo"}
 BOOLEANOS = {
     "etapa_exata": "--etapa-exata",
     "offline": "--offline",
@@ -189,6 +193,14 @@ def montar_argv(form, pasta_saida=None, agora=None, abrir=False):
     fase = (form.get("fase") or "").strip()
     if fase:
         argv += ["--fase", fase]
+    novo = (form.get("novo_processo") or "").strip()
+    if novo:
+        if novo not in NOVO_PROCESSO:
+            raise FormularioInvalido(f"'{novo}' não vale em \"Emitiu novo processo\" (use Sim ou Não).")
+        if novo == "Não" and any((form.get(c) or "").strip() for c in ("novo_processo_de", "novo_processo_ate")):
+            raise FormularioInvalido("\"Emitiu novo processo: Não\" não combina com a data do novo processo: "
+                                     "apague as datas ou escolha Sim.")
+        argv.append(NOVO_PROCESSO[novo])
     prios = [p for p in PRIORIDADES if p in (form.get("prioridade") or [])]
     if prios and len(prios) < len(PRIORIDADES):
         argv += ["--prioridade", ",".join(prios)]
