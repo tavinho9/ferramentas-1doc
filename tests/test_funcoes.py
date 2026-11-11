@@ -5,7 +5,7 @@ from datetime import date, datetime
 
 import pytest
 
-from ferramentas1doc import busca_argv, faltantes, processos_do_dia as pdd
+from ferramentas1doc import busca_argv, faltantes, processos_do_dia as pdd, verificar_planilha
 from ferramentas1doc.gui.log import TerminalEmMemoria
 
 HOJE = date(2026, 1, 15)
@@ -182,6 +182,25 @@ def test_faltantes_data_de_emissao_na_listagem():
             '<tr><td><a class="link_emissao_a" href="./?pg=doc/ver&hash=DDDD3333EEEE4444FFFF">'
             'Proc. Administrativo 31.700/2026</a></td></tr></table>')
     assert [ln["emissao"] for ln in faltantes.linhas_listagem(html)] == [date(2026, 11, 5), None]
+
+
+# O despacho pode vir com outras classes junto de texto_original.
+DESPACHOS_COM_VARIAS_CLASSES = (
+    '<table class="relative despacho"><tr><td class="celula_despacho">'
+    '<div class="texto_original">Segue para o processo nº 31.700/2026.</div></td></tr></table>'
+    '<table class="relative despacho"><tr><td class="celula_despacho">'
+    '<div class="texto_original fr-view">Emitido o Proc. Administrativo 31.800/2026 '
+    '(<a href="./?pg=doc/ver&hash=AAAA1111BBBB2222CCCC">ver</a>).</div></td></tr></table>'
+    '<table class="relative despacho"><tr><td class="celula_despacho">'
+    '<div class="fr-view texto_original">Abertura: processo 31.900/2026.</div></td></tr></table>'
+    '<p class="rodape">Processo 32.000/2026 fora dos despachos</p>')
+
+
+@pytest.mark.parametrize("modulo", [faltantes, verificar_planilha])
+def test_citacoes_le_despacho_com_varias_classes(modulo):
+    proprio = {"numero": "31.632/2026", "ano": "2026"}
+    assert modulo.citacoes(DESPACHOS_COM_VARIAS_CLASSES, proprio) == (
+        ["AAAA1111BBBB2222CCCC"], ["31.700/2026", "31.800/2026", "31.900/2026"])
 
 
 def test_terminal_reescreve_linha_com_retorno_de_carro():
