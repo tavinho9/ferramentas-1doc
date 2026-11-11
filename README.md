@@ -93,8 +93,17 @@ Por isso a busca acha o processo novo de quatro jeitos, mostrados na coluna
 |---|---|---|
 | *emissão* | evento "emitiu o Proc. Administrativo N/AAAA a partir deste documento" da linha do tempo | a do evento |
 | *origem* | o processo novo traz este no cabeçalho de origem, sem o evento aqui | a de emissão do processo novo |
-| *citado neste* | o texto de abertura ou um despacho deste processo cita o novo (link, ou número com "processo", "nº", "abertura"…) | a de emissão do processo novo |
+| *citado neste* | este processo cita o novo, no texto de abertura ou num despacho | a de emissão do processo novo |
 | *cita este* | o processo novo cita este, no texto de abertura ou num despacho | a de emissão do processo novo |
+
+A coluna *Citação* da aba *Novos processos* diz como a citação foi lida, da
+mais confiável para a menos: *menção do 1Doc* (o processo escolhido na lista
+ao escrever o despacho, que a página marca com `data-mention="2"`, no texto e
+na lista de documentos mencionados), *link no texto* ou *número no texto*
+(um número NN.NNN/AAAA digitado, com "processo", "nº", "abertura"… antes e
+sem "lei", "requisição", "contrato"…). Vale conferir primeiro as que vieram
+só do número digitado. O *Faltantes* e o *Verificar planilha* também passam
+a usar a menção do 1Doc para achar o processo novo.
 
 As menções (*citado neste* e *cita este*) só valem para um Proc.
 Administrativo que não tem outra origem registrada, foi emitido depois deste
@@ -111,7 +120,7 @@ já abertos, sem abrir outros.
 
 A planilha também ganha a coluna *Novo processo emitido em* (o mais recente;
 com período, o mais recente dentro dele) e, na aba *Novos processos*, cada
-processo novo, o vínculo, a data, quem emitiu (na emissão normal), a etapa
+processo novo, o vínculo, como foi citado, a data, quem emitiu (na emissão normal), a etapa
 em que ele está e o link para abri-lo. Na linha de comando:
 `--novo-processo`, `--sem-novo-processo`, `--novo-processo-de` e
 `--novo-processo-ate`; `--sem-mencoes` (em **Outras opções**) volta a

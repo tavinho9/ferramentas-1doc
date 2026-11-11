@@ -109,10 +109,10 @@ def test_busca_novo_processo(dados, cred, monkeypatch):
     assert linhas[1][linhas[0].index("Novo processo emitido em")] == tres_dias
     # só o processo: o memorando emitido a partir dele fica de fora
     assert _valores(res["arquivo"], "Novos processos") == [
-        ["Nº Processo", "Objeto", "Novo processo", "Vínculo", "Emitido em", "Autor", "Setor",
+        ["Nº Processo", "Objeto", "Novo processo", "Vínculo", "Citação", "Emitido em", "Autor", "Setor",
          "Etapa atual do processo", "Etapa do novo processo"],
-        ["31.632/2026", "Aquisição de medicamentos", "40.001/2026", "emissão", tres_dias, "Maria da Silva", "SS-DAF",
-         "Pesquisa de Mercado", None]]
+        ["31.632/2026", "Aquisição de medicamentos", "40.001/2026", "emissão", None, tres_dias, "Maria da Silva",
+         "SS-DAF", "Pesquisa de Mercado", None]]
     assert linhas[1][linhas[0].index("Novos processos (vínculo)")] == "40.001/2026 (emissão)"
     link = load_workbook(res["arquivo"])["Novos processos"]["C2"].hyperlink.target
     assert "hash=9999AAAA0000BBBB1111" in link
@@ -130,7 +130,7 @@ def test_busca_novo_processo(dados, cred, monkeypatch):
     # com período, a aba Novos processos diz quais caíram nele
     saida = os.path.join(str(dados["saida"]), "periodo.xlsx")
     busca.main(["--offline", "--saida", saida, "--novo-processo-de", "-5"])
-    assert [l[5] for l in _valores(saida, "Novos processos")] == ["No período filtrado?", "sim"]
+    assert [l[6] for l in _valores(saida, "Novos processos")] == ["No período filtrado?", "sim"]
 
     # Cache gravado antes de a busca ler as emissões (só com os números em "derivados")
     arq = os.path.join(str(dados["dados"]), "1doc_cache.json")
@@ -154,6 +154,10 @@ def test_busca_novo_processo(dados, cred, monkeypatch):
 
 
 FASE_PREP = "Fase Preparatória de Procedimento Licitatório"
+# Como o 1Doc mostra, abaixo do despacho, o documento mencionado nele (marcação real, outro hash)
+MENCAO_PRE_VISUALIZAR = """<a class=" pre_visualizar" data-mention="2"
+  href="./?pg=doc/ver&amp;hash=AB02AAAA0000000000BB&amp;itd=3&amp;origem=emissao_anexada">
+  <i class="icon-folder-open"></i> Proc. Administrativo 39.144/2026 - Abertura de Procedimento Licitatório </a>"""
 ETAPAS_FASE = [("Elaboração de Documentos", "Ficou aqui 2 dias", False), ("Etapa Final", "Esta aqui 5 dias", True)]
 
 
@@ -167,11 +171,11 @@ def _mencoes(monkeypatch):
         "FP01AAAA0000000000AA": {"numero": "30.500/2026", "objeto": "Fase de medicamentos", "assunto": FASE_PREP,
                                  "etapas": ETAPAS_FASE, "prioridade": "Alta", "emissao_dt": hoje - timedelta(days=10),
                                  "despacho": "Concluída a fase preparatória."},
-        # esta cita a Abertura 39.144, que não está em caixa nenhuma do setor: "citado neste"
+        # esta menciona a Abertura 39.144, que não está em caixa nenhuma do setor: "citado neste". A
+        # menção do 1Doc só aparece na lista de documentos mencionados, fora do texto do despacho.
         "FP02AAAA0000000000BB": {"numero": "30.600/2026", "objeto": "Fase de merenda", "assunto": FASE_PREP,
                                  "etapas": ETAPAS_FASE, "prioridade": "Alta", "emissao_dt": hoje - timedelta(days=10),
-                                 "despacho": 'A demanda prossegue no <a href="./?pg=doc/ver&hash=AB02AAAA0000000000BB'
-                                             '&itd=3&origem=emissao_anexada">Proc. Administrativo 39.144/2026</a>.'},
+                                 "despacho": "A demanda segue para a abertura.", "anexos": MENCAO_PRE_VISUALIZAR},
         # citada só por quem não conta: abertura com outra origem e processo de pagamento
         "FP03AAAA0000000000CC": {"numero": "30.700/2026", "objeto": "Fase de obras", "assunto": FASE_PREP,
                                  "etapas": ETAPAS_FASE, "prioridade": "Alta", "emissao_dt": hoje - timedelta(days=10),
@@ -214,9 +218,9 @@ def test_busca_novo_processo_por_mencao(dados, cred, monkeypatch):
     assert [r["novo_processo_em"].date() for r in res["regs"]] == [(hoje - timedelta(days=2)).date(),
                                                                   (hoje - timedelta(days=1)).date()]
     aba = _valores(saida, "Novos processos")
-    assert [(l[0], l[2], l[3], l[8]) for l in aba[1:]] == [
-        ("30.500/2026", "41.000/2026", "cita este", "Validação de Requisição"),
-        ("30.600/2026", "39.144/2026", "citado neste", "Validação de Requisição")]
+    assert [(l[0], l[2], l[3], l[4], l[9]) for l in aba[1:]] == [
+        ("30.500/2026", "41.000/2026", "cita este", "número no texto", "Validação de Requisição"),
+        ("30.600/2026", "39.144/2026", "citado neste", "menção do 1Doc", "Validação de Requisição")]
     assert "hash=AB02AAAA0000000000BB" in load_workbook(saida)["Novos processos"]["C3"].hyperlink.target
     params = dict(res["params"])
     assert "(emissão normal ou menção)" in params["Filtros"]

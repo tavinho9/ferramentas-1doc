@@ -167,9 +167,29 @@ def test_citados_no_texto_e_nos_despachos():
       <a href="./?pg=doc/ver&hash=8888cccc">link</a>. Processo 39.144/2026 de novo.</div></td></tr></table>
       <div class="outro">processo 99.999/2026 fora dos blocos de texto</div>"""
     assert busca._citados(BeautifulSoup(html, "html.parser"), "41.000/2026", "HASHPROPRIO") == [
-        {"numero": "30.500/2026", "hash": ""},
-        {"numero": "39.144/2026", "hash": "65EDAAAA"},     # link e número do mesmo processo: um registro
-        {"numero": "", "hash": "8888CCCC"}]                 # link sem número: confere-se ao abrir
+        {"numero": "30.500/2026", "hash": "", "fonte": "texto"},
+        {"numero": "39.144/2026", "hash": "65EDAAAA", "fonte": "link"},   # link e número: um registro
+        {"numero": "", "hash": "8888CCCC", "fonte": "link"}]              # sem número: confere-se ao abrir
+
+
+def test_citados_mencao_do_1doc():
+    """A menção escolhida na lista do 1Doc (data-mention="2"), com a marcação real: no corpo do
+    despacho e na lista de documentos mencionados, fora do bloco de texto. Vale sem contexto antes
+    do número e vem primeiro, mesmo que o número também apareça digitado."""
+    from bs4 import BeautifulSoup
+    from ferramentas1doc import busca
+    html = """<table class="despacho"><tr><td class="celula_despacho"><div class="texto_original fr-view">
+      Segue em <a class="mention label mention_2" href="https://app.1doc.com.br/?pg=doc/ver&amp;hash=5476D715A594730A44C82DCD&amp;itd=3&amp;gr=10&amp;origem=mention&amp;s=montesclaros" target="_blank" data-mention="2" data-tipo="2" data-id="55747711" rel="noreferrer noopener">Proc. Administrativo 26.831/2026 - Licitação da Construção da Praça de Santa Rita Rural</a>,
+      processo 26.831/2026.</div>
+      <a class=" pre_visualizar" data-mention="2" href="./?pg=doc/ver&amp;hash=5476D715A594730A44C82DCD&amp;itd=3&amp;origem=emissao_anexada">
+        <i class="icon-folder-open"></i> Proc. Administrativo 26.831/2026 - Abertura de Procedimento Licitatório </a>
+      <a class=" pre_visualizar" data-mention="2" href="./?pg=doc/ver&amp;hash=AAAA0000BBBB1111CCCC2222">
+        <i class="icon-folder-open"></i> Proc. Administrativo 27.000/2026 - Fase Preparatória </a>
+      <a class="mention label mention_1" data-mention="1" href="./?pg=usuario&amp;hash=FFFF">Maria</a>
+      </td></tr></table>"""
+    assert busca._citados(BeautifulSoup(html, "html.parser"), "1/2026", "") == [
+        {"numero": "26.831/2026", "hash": "5476D715A594730A44C82DCD", "fonte": "mencao"},
+        {"numero": "27.000/2026", "hash": "AAAA0000BBBB1111CCCC2222", "fonte": "mencao"}]
 
 
 def _det(numero, assunto, emissao, pai="", tipo_doc="Proc. Administrativo", citados=(), hash_=""):
@@ -204,10 +224,13 @@ def test_novos_processos_por_vinculo():
     from ferramentas1doc import busca
     fase = {**_det("30.500/2026", FASE, "2026-11-01T09:00:00", citados=["41.000/2026", "40.001/2026"]),
             "emissoes": [{"numero": "40.001/2026", "tipo": "Proc. Administrativo", "data": "2026-11-02T10:00:00"}]}
+    fase["citados"][0]["fonte"] = "mencao"
+    abertura = _det("41.000/2026", ABERTURA, "2026-11-05T09:00:00", citados=["30.500/2026"])
+    abertura["citados"][0]["fonte"] = "texto"
     uni = busca.Universo([
         fase,
         _det("40.001/2026", ABERTURA, "2026-11-02T10:00:00", pai="30.500/2026", citados=["30.500/2026"]),
-        _det("41.000/2026", ABERTURA, "2026-11-05T09:00:00", citados=["30.500/2026"]),
+        abertura,
         _det("41.050/2026", ABERTURA, "2026-11-06T09:00:00", pai="30.500/2026"),
         _det("41.100/2026", ABERTURA, "2026-11-07T09:00:00", pai="28.000/2026", citados=["30.500/2026"]),
     ])
@@ -216,6 +239,7 @@ def test_novos_processos_por_vinculo():
     assert [(n["numero"], n["vinculos"]) for n in novos] == [
         ("40.001/2026", ["emissão"]), ("41.000/2026", ["citado neste", "cita este"]), ("41.050/2026", ["origem"])]
     assert novos[1]["data"] == datetime(2026, 11, 5, 9, 0) and novos[1]["etapa"] == "Validação de Requisição"
+    assert novos[1]["fontes"] == ["mencao", "texto"]          # a menção do 1Doc vem antes do número digitado
     assert busca.texto_novos(novos) == ("40.001/2026 (emissão), 41.000/2026 (citado neste + cita este), "
                                         "41.050/2026 (origem)")
     # só a emissão normal: fica a origem, saem as menções
@@ -294,6 +318,19 @@ def test_citacoes_le_despacho_com_varias_classes(modulo):
     proprio = {"numero": "31.632/2026", "ano": "2026"}
     assert modulo.citacoes(DESPACHOS_COM_VARIAS_CLASSES, proprio) == (
         ["AAAA1111BBBB2222CCCC"], ["31.700/2026", "31.800/2026", "31.900/2026"])
+
+
+@pytest.mark.parametrize("modulo", [faltantes, verificar_planilha])
+def test_citacoes_le_mencao_do_1doc_fora_do_texto(modulo):
+    """A lista de documentos mencionados fica fora do .texto_original; a menção a usuário não conta."""
+    html = ('<table class="relative despacho"><tr><td class="celula_despacho">'
+            '<div class="texto_original fr-view">Segue.</div>'
+            '<a class=" pre_visualizar" data-mention="2" href="./?pg=doc/ver&amp;hash=5476D715A594730A44C82DCD'
+            '&amp;itd=3&amp;origem=emissao_anexada"><i class="icon-folder-open"></i> Proc. Administrativo '
+            '26.831/2026 - Abertura de Procedimento Licitatório</a>'
+            '<a class="mention label mention_1" data-mention="1" href="./?pg=x&amp;hash=FFFF0000FFFF0000FFFF">'
+            'Maria</a></td></tr></table>')
+    assert modulo.citacoes(html, {"numero": "1/2026", "ano": "2026"}) == (["5476D715A594730A44C82DCD"], [])
 
 
 def test_terminal_reescreve_linha_com_retorno_de_carro():

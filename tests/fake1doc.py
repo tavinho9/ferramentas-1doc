@@ -12,8 +12,9 @@ eventos "emitiu o <tipo> <número> a partir deste documento" na linha do tempo.
 Para as menções entre processos, também: "assunto" (padrão: Abertura de
 Procedimento Licitatório), "emissao_dt" (datetime; padrão: hoje 09:15),
 "caixa" (padrão: entrada; None = fora das caixas, só abre pelo link ou pelo
-número), "pai" ((número, hash) do processo de origem, no cabeçalho) e
-"despacho" (HTML do texto do despacho).
+número), "pai" ((número, hash) do processo de origem, no cabeçalho),
+"despacho" (HTML do texto do despacho) e "anexos" (HTML que fica no despacho
+fora do bloco de texto, como a lista de documentos mencionados).
 """
 
 from datetime import date, datetime, timedelta, timezone
@@ -149,7 +150,7 @@ def detalhe(h):
   <abbr class="despacho_data" title="Em {HOJE:%d/%m/%Y} 10:00">hoje</abbr>
   <div class="rf_header"><strong>Despacho 1</strong></div>
   <div class="rf_de"><span class="badge_env">SS-DAF</span></div>
-</th></tr><tr><td class="celula_despacho"><div class="texto_original fr-view">{p.get('despacho', 'Encaminho para análise.')}</div></td></tr>
+</th></tr><tr><td class="celula_despacho"><div class="texto_original fr-view">{p.get('despacho', 'Encaminho para análise.')}</div>{p.get('anexos', '')}</td></tr>
 </table></div>
 {eventos}
 <div class="tm_conteudo"><div id="parent_wa" data-current_idph="1">{kanban(p, modelo=True)}</div></div>

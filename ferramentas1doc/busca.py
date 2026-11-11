@@ -96,6 +96,9 @@ RE_CTX_OUTRO_DOC = re.compile(r"(lei|decreto|portaria|requisi|\brc\b|contrato|\b
 # Link de despacho para documento que não é processo (o texto do link diz o tipo)
 RE_LINK_OUTRO_DOC = re.compile(r"^(memorando|oficio|parecer|circular|despacho|decreto|portaria|anexo)")
 MAX_CITADOS = 40
+# De onde veio a citação, da mais confiável para a menos (ver _citados), e como aparece na planilha
+FONTES_CITACAO = ("mencao", "link", "texto")
+ROTULO_FONTE = {"mencao": "menção do 1Doc", "link": "link no texto", "texto": "número no texto"}
 # Família da licitação, na ordem do fluxo: Elaboração de Documentação Preparatória → Fase
 # Preparatória → Abertura de Procedimento Licitatório. Um processo citado só conta como novo se
 # estiver adiante na família (ver aceita_mencao).
@@ -633,39 +636,57 @@ def _despachos(soup) -> list[dict]:
 
 
 def _citados(soup, proprio_numero: str | None, proprio_hash: str) -> list[dict]:
-    """Outros processos mencionados no texto de abertura e nos despachos (blocos .texto_original):
-    links para documentos (hash, e o número quando o texto do link o traz) e números NN.NNN/AAAA
-    com contexto de processo antes ("processo", "abertura", "nº"…) e sem contexto de lei,
-    requisição, contrato etc. Não filtra por ano: o mesmo registro serve para os dois sentidos
-    (este cita o novo; o novo cita este), e a data é conferida no uso (aceita_mencao).
-    Devolve [{numero, hash}], sem repetir, no máximo MAX_CITADOS."""
+    """Outros processos mencionados neste, de três fontes, da mais confiável para a menos:
+      - "mencao": a menção do 1Doc, escolhida na lista ao escrever o despacho. Vem como
+        <a data-mention="2"> com o hash no href e "Proc. Administrativo N/AAAA - …" no texto,
+        tanto no corpo do despacho (class "mention label mention_2") quanto na lista de
+        documentos mencionados (class "pre_visualizar"). Lida em qualquer lugar da página;
+      - "link": outro link para documento dentro do texto de abertura e dos despachos
+        (blocos .texto_original), com o número quando o texto do link o traz;
+      - "texto": número NN.NNN/AAAA digitado nesses blocos, com contexto de processo antes
+        ("processo", "abertura", "nº"…) e sem contexto de lei, requisição, contrato etc.
+    Não filtra por ano: o mesmo registro serve para os dois sentidos (este cita o novo; o novo
+    cita este), e a data é conferida no uso (aceita_mencao).
+    Devolve [{numero, hash, fonte}], um por processo (com a fonte mais confiável), no máximo
+    MAX_CITADOS."""
     out = []
 
-    def add(numero, h):
+    def add(numero, h, fonte):
         if (numero and numero == proprio_numero) or (h and h == proprio_hash):
             return
         for c in out:  # link e número do mesmo processo viram um registro só
             if (numero and c["numero"] == numero) or (h and c["hash"] == h):
                 c["numero"], c["hash"] = c["numero"] or numero, c["hash"] or h
+                if forca_fonte(fonte) < forca_fonte(c["fonte"]):
+                    c["fonte"] = fonte
                 return
         if len(out) < MAX_CITADOS:
-            out.append({"numero": numero, "hash": h})
+            out.append({"numero": numero, "hash": h, "fonte": fonte})
 
+    def de_link(a, fonte):
+        h = ((parse_qs(urlparse(a.get("href", "")).query).get("hash") or [""])[0]).upper()
+        nums = numeros_de_texto(txt(a))
+        if (h or nums) and not RE_LINK_OUTRO_DOC.match(normtxt(txt(a))):
+            add(nums[0] if nums else "", h, fonte)
+
+    for a in soup.select('[data-mention="2"], .mention_2'):
+        de_link(a, "mencao")
     for bloco in soup.find_all(class_=lambda c: bool(c) and "texto_original" in str(c).split()):
         for a in bloco.select("a[href]"):
-            h = ((parse_qs(urlparse(a["href"]).query).get("hash") or [""])[0]).upper()
-            rotulo = normtxt(txt(a))
-            if not h or RE_LINK_OUTRO_DOC.match(rotulo):
-                continue
-            nums = numeros_de_texto(txt(a))
-            add(nums[0] if nums else "", h)
+            if (parse_qs(urlparse(a["href"]).query).get("hash") or [""])[0]:
+                de_link(a, "link")
         texto = bloco.get_text(" ")
         for m in RE_NUM_LIVRE.finditer(texto):
             n = norm_numero(f"{m[1]}/{m[2]}")
             antes = norm_contexto(texto[max(0, m.start() - 45):m.start()])
             if n and RE_CTX_PROCESSO.search(antes) and not RE_CTX_OUTRO_DOC.search(antes[-30:]):
-                add(n, "")
+                add(n, "", "texto")
     return out
+
+
+def forca_fonte(fonte: str) -> int:
+    """Posição em FONTES_CITACAO (menor = mais confiável); fonte desconhecida fica por último."""
+    return FONTES_CITACAO.index(fonte) if fonte in FONTES_CITACAO else len(FONTES_CITACAO)
 
 
 def resolver_etapa(rotulo: str, titulos: list[str]) -> str:
@@ -1110,7 +1131,9 @@ class Universo:
                 self.filhos.setdefault(pai, []).append(n)
             for c in d.get("citados") or []:
                 for k in {c.get("numero"), (c.get("hash") or "").upper()} - {"", None}:
-                    self.citam.setdefault(k, []).append(n)
+                    quem = self.citam.setdefault(k, {})  # número de quem cita → fonte da citação
+                    if n not in quem or forca_fonte(c.get("fonte", "")) < forca_fonte(quem[n]):
+                        quem[n] = c.get("fonte", "")
 
     def achar(self, citado: dict) -> dict | None:
         """Pelo número; sem ele (ou sem processo aberto com ele), pelo hash do link."""
@@ -1156,17 +1179,20 @@ def novos_processos(det: dict, uni: Universo | None = None, mencoes: bool = True
                   "vinculos": [V_EMISSAO]} for n in det.get("derivados") or []]
     por_num = {n["numero"]: n for n in novos}
 
-    def add(outro, vinculo):
+    def add(outro, vinculo, fonte=""):
         n = norm_numero(outro.get("numero") or "")
         if n in por_num:
             # vínculo normal (emissão/origem) já basta; menções só se somam entre si
-            vs = por_num[n]["vinculos"]
-            if vinculo not in vs and not any(v in VINCULOS_NORMAIS for v in vs):
-                vs.append(vinculo)
+            x = por_num[n]
+            if not any(v in VINCULOS_NORMAIS for v in x["vinculos"]):
+                if vinculo not in x["vinculos"]:
+                    x["vinculos"].append(vinculo)
+                if fonte and fonte not in x["fontes"]:
+                    x["fontes"] = sorted([*x["fontes"], fonte], key=forca_fonte)
             return
         por_num[n] = {"numero": n, "tipo": outro.get("tipo_doc", ""), "data": de_iso(outro.get("emissao")),
                       "autor": "", "setor": "", "hash": (outro.get("hash") or "").upper(),
-                      "url": outro.get("url", ""), "vinculos": [vinculo]}
+                      "url": outro.get("url", ""), "vinculos": [vinculo], "fontes": [fonte] if fonte else []}
         novos.append(por_num[n])
 
     proprio = norm_numero(det.get("numero") or "")
@@ -1179,12 +1205,13 @@ def novos_processos(det: dict, uni: Universo | None = None, mencoes: bool = True
             for c in det.get("citados") or []:
                 outro = uni.achar(c)
                 if outro is not None and aceita_mencao(det, outro):
-                    add(outro, V_CITADO)
+                    add(outro, V_CITADO, c.get("fonte", ""))
             chaves = [proprio] + ([det["hash"].upper()] if det.get("hash") else [])
-            for n in dict.fromkeys(q for k in chaves for q in uni.citam.get(k, [])):
-                outro = uni.por_numero[n]
-                if aceita_mencao(det, outro):
-                    add(outro, V_CITA)
+            for k in chaves:
+                for n, fonte in uni.citam.get(k, {}).items():
+                    outro = uni.por_numero[n]
+                    if aceita_mencao(det, outro):
+                        add(outro, V_CITA, fonte)
         for n in novos:  # etapa do novo processo, quando ele foi aberto
             outro = uni.por_numero.get(n["numero"])
             if outro is not None:
@@ -1546,10 +1573,10 @@ def escrever_xlsx(caminho: str, regs: list[dict], params: list[tuple[str, str]],
     # Um processo novo por linha (o processo da aba Resultado é o de origem)
     wn = wb.create_sheet("Novos processos")
     ncols = [("Nº Processo", "numero", 13), ("Objeto", "assunto", 45), ("Novo processo", "novo", 13),
-             ("Vínculo", "vinculo", 16), ("Emitido em", "data", 17), ("Autor", "autor", 24), ("Setor", "setor", 18),
+             ("Vínculo", "vinculo", 16), ("Citação", "citacao", 16), ("Emitido em", "data", 17), ("Autor", "autor", 24), ("Setor", "setor", 18),
              ("Etapa atual do processo", "etapa_atual", 26), ("Etapa do novo processo", "etapa", 26)]
     if marcar_novo:
-        ncols.insert(5, ("No período filtrado?", "no_periodo", 11))
+        ncols.insert(6, ("No período filtrado?", "no_periodo", 11))
     cabecalho(wn, ncols)
     lin = 2
     for r in regs:
@@ -1557,6 +1584,7 @@ def escrever_xlsx(caminho: str, regs: list[dict], params: list[tuple[str, str]],
         for n in r["novos"]:
             linha = {**n, "numero": r["numero"], "assunto": r["assunto"], "novo": n["numero"],
                      "vinculo": " + ".join(n.get("vinculos") or []),
+                     "citacao": " / ".join(ROTULO_FONTE.get(f, f) for f in n.get("fontes") or []),
                      "etapa_atual": r["etapa"], "no_periodo": "sim" if id(n) in no_per else "não"}
             for j, (_, campo, _) in enumerate(ncols, 1):
                 c = wn.cell(row=lin, column=j, value=limpo(linha.get(campo)))
@@ -1862,10 +1890,12 @@ def executar(a, cli: Cliente1Doc | None, setor: str, agora: datetime) -> dict:
         ("Novo processo", "Vínculos (coluna 'Novos processos (vínculo)' e aba 'Novos processos'): "
                           "• emissão — evento 'emitiu o Proc. Administrativo N/AAAA a partir deste documento' "
                           "da linha do tempo, com a data/hora dele; • origem — o processo novo traz este no "
-                          "cabeçalho de origem, sem o evento aqui; • citado neste — o texto de abertura ou um "
-                          "despacho deste processo cita o novo (link ou número com 'processo', 'nº'…); "
-                          "• cita este — o processo novo cita este. Os dois últimos cobrem a emissão que não foi "
-                          "a normal e só valem para Proc. Administrativo sem outra origem, emitido depois deste e "
+                          "cabeçalho de origem, sem o evento aqui; • citado neste — este processo cita o novo; "
+                          "• cita este — o processo novo cita este. A coluna 'Citação' diz como: menção do 1Doc "
+                          "(o processo escolhido na lista ao escrever o despacho, data-mention), link no texto "
+                          "ou número no texto (com 'processo', 'nº'… antes). Os dois últimos cobrem a emissão "
+                          "que não foi a normal e só valem para Proc. Administrativo sem outra origem, emitido "
+                          "depois deste e "
                           "adiante na licitação (Elaboração → Fase Preparatória → Abertura); a data é a de emissão "
                           "do processo novo. Só conta processo: memorando, ofício etc. ficam de fora. 'Novo processo "
                           "emitido em' é o mais recente (com o filtro de período, o mais recente dentro dele)."),
