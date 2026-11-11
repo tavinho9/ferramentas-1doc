@@ -734,8 +734,10 @@ def _tem_abertura(a):
 def citacoes(html, proprio):
     """Candidatos citados nos despachos: ([hashes de links], [números])."""
     from bs4 import SoupStrainer
-    blocos = BeautifulSoup(html, PARSER,
-                           parse_only=SoupStrainer(class_="texto_original"))
+    # Função, não texto: no bs4 4.13+ o SoupStrainer(class_="texto_original")
+    # compara a string de classe inteira e perde <div class="texto_original fr-view">.
+    blocos = BeautifulSoup(html, PARSER, parse_only=SoupStrainer(
+        class_=lambda c: bool(c) and "texto_original" in str(c).split()))
     hashes, numeros = [], []
     ano_min = int(proprio["ano"])
     for a in blocos.select("a[href]"):
