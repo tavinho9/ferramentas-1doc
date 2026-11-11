@@ -78,7 +78,17 @@ def resumo(caminho):
     return out
 
 
+def utf8_no_console():
+    """O console do Windows usa cp1252: os ✓ e ✗ das mensagens não caberiam."""
+    for f in (sys.stdout, sys.stderr):
+        try:
+            f.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
+
 def main():
+    utf8_no_console()
     pasta = os.path.abspath(sys.argv[1])
     falhas = 0
     nomes = sorted(set(os.listdir(os.path.join(pasta, "python"))) | set(os.listdir(os.path.join(pasta, "rust"))))

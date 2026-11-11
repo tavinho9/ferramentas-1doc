@@ -75,7 +75,17 @@ def entradas(pasta):
     wb.save(os.path.join(pasta, "sem_cabecalho.xlsx"))
 
 
+def utf8_no_console():
+    """O console do Windows usa cp1252: os ✓ e ✗ das mensagens não caberiam."""
+    for f in (sys.stdout, sys.stderr):
+        try:
+            f.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
+
 def main():
+    utf8_no_console()
     pasta = os.path.abspath(sys.argv[1])
     entrada = os.path.join(pasta, "entrada")
     saida = os.path.join(pasta, "python")
