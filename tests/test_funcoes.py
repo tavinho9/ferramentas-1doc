@@ -346,6 +346,109 @@ def test_citacoes_le_mencao_do_1doc_fora_do_texto(modulo):
     assert modulo.citacoes(html, {"numero": "1/2026", "ano": "2026"}) == (["5476D715A594730A44C82DCD"], [])
 
 
+# Menção a uma pessoa no corpo do despacho, com a marcação real do 1Doc: o href é a página que quem
+# escreveu tinha aberta (aqui, outro processo, porque o texto foi colado), não a pessoa.
+MENCAO_A_PESSOA = (
+    '<a class="mention label mention_1" style="color:#ffffff;font-size:12px;" '
+    'href="https://montesclaros.1doc.com.br/?pg=doc%2Fver&amp;hash=3AD9FC350E70AF6872C1B7A2&amp;itd=3'
+    '&amp;s=montesclaros&amp;origem=painel_setor&amp;caixa=entrada&amp;marcador=963214&amp;ordenar=2'
+    '&amp;ordem=desc" data-mention="1" data-tipo="1" data-id="511" data-id-setor="351">'
+    'Maria da Silva - SS-DAF</a>')
+DESPACHO_COM_PESSOA = (
+    '<table class="relative despacho"><tr><td class="celula_despacho"><div class="texto_original fr-view">'
+    f'Prezada {MENCAO_A_PESSOA}, segue para ciência. Ver também '
+    '<a class="mention label mention_2" data-mention="2" href="./?pg=doc/ver&amp;hash=5476D715A594730A44C82DCD">'
+    'Proc. Administrativo 26.831/2026 - Abertura</a>.</div></td></tr></table>')
+
+
+def test_citados_ignora_mencao_a_pessoa_no_despacho():
+    from ferramentas1doc import busca
+    assert busca.mencoes_da_pagina(DESPACHO_COM_PESSOA, "1/2026", "") == [
+        {"numero": "26.831/2026", "hash": "5476D715A594730A44C82DCD", "fonte": "mencao"}]
+
+
+@pytest.mark.parametrize("modulo", [faltantes, verificar_planilha])
+def test_citacoes_ignora_mencao_a_pessoa_no_despacho(modulo):
+    # o número do texto da menção ao documento também vale; o hash da página de quem escreveu, não
+    assert modulo.citacoes(DESPACHO_COM_PESSOA, {"numero": "1/2026", "ano": "2026"}) == (
+        ["5476D715A594730A44C82DCD"], ["26.831/2026"])
+
+
+# O editor do 1Doc às vezes parte o número com a formatação. O navegador mostra o número inteiro;
+# lido com espaço entre os pedaços, "40. 001/2026" virava 1/2026, ou a citação sumia.
+NUMEROS_PARTIDOS = ["40.<span>001/2026</span>", "<span>40.</span><span>001/2026</span>",
+                    "<b>40.</b>001/2026", "40<span>.001/2026</span>", "40.001<span>/2026</span>",
+                    "40.<strong><em>001</em></strong>/2026"]
+
+
+@pytest.mark.parametrize("numero", NUMEROS_PARTIDOS)
+def test_citados_numero_partido_pela_formatacao(numero):
+    from ferramentas1doc import busca
+    html = f'<div class="texto_original fr-view">Segue o processo nº {numero} para análise.</div>'
+    assert busca.mencoes_da_pagina(html, "1/2026", "") == [
+        {"numero": "40.001/2026", "hash": "", "fonte": "texto"}]
+
+
+@pytest.mark.parametrize("modulo", [faltantes, verificar_planilha])
+@pytest.mark.parametrize("numero", NUMEROS_PARTIDOS)
+def test_citacoes_numero_partido_pela_formatacao(modulo, numero):
+    html = f'<div class="texto_original fr-view">Segue o processo nº {numero} para análise.</div>'
+    assert modulo.citacoes(html, {"numero": "1/2026", "ano": "2026"}) == ([], ["40.001/2026"])
+
+
+# Data no despacho, com contexto de processo antes: o 11/2026 de "12/11/2026" não é um processo.
+DESPACHO_COM_DATAS = ('<div class="texto_original fr-view">Recebido no dia 12/11/2026 e autuado em '
+                      '1/11/2026; segue o processo nº 40.001/2026 e o nº 3/2026.</div>')
+
+
+@pytest.mark.parametrize("modulo", [faltantes, verificar_planilha])
+def test_citacoes_data_nao_vira_processo(modulo):
+    assert modulo.citacoes(DESPACHO_COM_DATAS, {"numero": "1/2026", "ano": "2026"}) == (
+        [], ["40.001/2026", "3/2026"])
+
+
+def test_texto_corrido():
+    """Em linha, o texto continua; bloco, quebra de linha e célula separam. Comentário e script
+    ficam de fora, como no get_text."""
+    from bs4 import BeautifulSoup
+    from ferramentas1doc import busca
+    html = ('<div>Proc. n<sup>o</sup> 4<b>0</b>.001/2026<br>Lei 14.133/2021<p>processo 12</p>345/2026'
+            '<!-- 99.999/2026 --><script>var x = "88.888/2026";</script><table><tr><td>1</td>'
+            '<td>2</td></tr></table></div>')
+    texto = " ".join(busca.texto_corrido(BeautifulSoup(html, "html.parser")).split())
+    assert texto == "Proc. no 40.001/2026 Lei 14.133/2021 processo 12 345/2026 1 2"
+
+
+@pytest.mark.parametrize("modulo", [faltantes, verificar_planilha])
+def test_processo_novo_do_cache_precisa_continuar_citado(modulo, monkeypatch):
+    """Processo novo guardado no cache só pela citação (sem origem no cabeçalho) volta só se a
+    página ainda o citar: o vínculo achado antes pelo link de uma menção a pessoa não se repete."""
+    import threading
+    from types import SimpleNamespace
+    import fake1doc
+    h_novo = "3AD9FC350E70AF6872C1B7A2"
+    monkeypatch.setitem(fake1doc.PROCESSOS, h_novo, {**fake1doc.PROCESSOS["AAAA1111BBBB2222CCCC"],
+                                                     "numero": "39.144/2026"})
+    pagina_novo = fake1doc.detalhe(h_novo)   # Abertura sem origem: só vale citada
+    monkeypatch.setattr(modulo, "USAR_INDICE_ORIGEM", False)
+    monkeypatch.setattr(modulo, "abrir", lambda ctx, item, link=None: (
+        (h_novo, pagina_novo, "cache", "") if item["numero"] == "39.144/2026" else None))
+    monkeypatch.setattr(modulo, "baixar", lambda sessao, url, **kw: pagina_novo if h_novo in url else "")
+    elab = {"numero": "31.000/2026", "ano": "2026", "hash": "ELAB0000ELAB0000ELAB"}
+
+    def novos(despacho):
+        ctx = SimpleNamespace(cache={"novo:31.000/2026": ["39.144/2026"]}, lock_cache=threading.Lock(),
+                              sessao=None)
+        html = (f'<table class="relative despacho"><tr><td class="celula_despacho">'
+                f'<div class="texto_original fr-view">{despacho}</div></td></tr></table>')
+        return [(n["numero"], n["vinculo"]) for n in modulo.buscar_novos(ctx, elab, html)]
+
+    assert novos(f"Prezada {MENCAO_A_PESSOA}, segue.") == []
+    assert novos("A demanda segue no processo nº 39.144/2026.") == [("39.144/2026", "citado em despacho")]
+    assert novos(f'Segue <a class="mention label mention_2" data-mention="2" href="./?pg=doc/ver&amp;hash={h_novo}">'
+                 'Proc. Administrativo 39.144/2026 - Abertura</a>.') == [("39.144/2026", "citado em despacho")]
+
+
 def test_terminal_reescreve_linha_com_retorno_de_carro():
     t = TerminalEmMemoria()
     for pedaco in ["Lendo caixas\n", "  Em aberto: página 1/3", "\r  Em aberto: página 2/3",
