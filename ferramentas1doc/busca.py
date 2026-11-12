@@ -744,22 +744,40 @@ def mencoes_da_pagina(html: str, proprio_numero: str = "", proprio_hash: str = "
     return _citados(BeautifulSoup(html, PARSER), norm_numero(proprio_numero or ""), (proprio_hash or "").upper())
 
 
-def texto_mencoes(citados: list[dict], pai: str = "", filhos=(), achar=None) -> str:
-    """Coluna "Menções": todos os processos citados, mesmo quando não dá para dizer se são o pai
-    ou o filho. '(pai)' é o processo de origem; '(filho)', um dos processos novos; '(número no
-    texto)', citação só pelo número digitado. `achar(citado)` dá o número de um link sem número.
-    Ex.: '28.133/2026 (pai), 39.144/2026 (filho), 30.161/2026 (número no texto)'."""
+def itens_mencoes(citados: list[dict], pai: str = "", filhos=(), achar=None, endereco=None) -> list[tuple[str, str]]:
+    """Os processos da coluna "Menções", cada um com o endereço dele no 1Doc: [(rótulo, url)].
+    '(pai)' é o processo de origem; '(filho)', um dos processos novos; '(número no texto)',
+    citação só pelo número digitado. `achar(citado)` dá o número de um link sem número;
+    `endereco(numero, hash)` dá o endereço do processo citado ("" se não se sabe): pelo hash do
+    próprio link e, no número digitado, pelo hash que já se conhece para aquele número.
+    Os que têm endereço vêm primeiro (na ordem da página), para o link da célula ser o do
+    primeiro processo da lista; o número sem hash conhecido fica no fim, sem link."""
     pai = norm_numero(pai or "") or ""
     filhos = {norm_numero(f or "") for f in filhos} - {None}
-    partes = []
+    itens = []
     for c in citados or []:
         n = c.get("numero") or ((achar(c) or "") if achar else "")
+        h = (c.get("hash") or "").upper()
         extra = ["pai"] if n and n == pai else ["filho"] if n and n in filhos else []
         if c.get("fonte") == "texto":
             extra.append(ROTULO_FONTE["texto"])
-        rotulo = n or f"link {(c.get('hash') or '')[:10]}…"
-        partes.append(rotulo + (f" ({'; '.join(extra)})" if extra else ""))
-    return ", ".join(partes)
+        rotulo = n or f"link {h[:10]}…"
+        url = (endereco(n, h) or "") if endereco else ""
+        itens.append((rotulo + (f" ({'; '.join(extra)})" if extra else ""), url))
+    return sorted(itens, key=lambda i: not i[1])
+
+
+def texto_mencoes(citados: list[dict], pai: str = "", filhos=(), achar=None, endereco=None) -> str:
+    """Coluna "Menções": todos os processos citados, mesmo quando não dá para dizer se são o pai
+    ou o filho (ver itens_mencoes).
+    Ex.: '28.133/2026 (pai), 39.144/2026 (filho), 30.161/2026 (número no texto)'."""
+    return ", ".join(r for r, _ in itens_mencoes(citados, pai, filhos, achar, endereco))
+
+
+def mencoes_e_link(citados: list[dict], pai: str = "", filhos=(), achar=None, endereco=None) -> tuple[str, str]:
+    """(texto da coluna Menções, link da célula): o link é o do primeiro processo da lista."""
+    itens = itens_mencoes(citados, pai, filhos, achar, endereco)
+    return ", ".join(r for r, _ in itens), (itens[0][1] if itens else "")
 
 
 def forca_fonte(fonte: str) -> int:
@@ -1221,6 +1239,21 @@ class Universo:
         return d
 
 
+def endereco_citado(numero: str, hash_: str, uni: Universo | None, base: str, itd: str) -> str:
+    """Endereço no 1Doc de um processo citado: pelo hash do link (menção do 1Doc ou link no
+    texto); sem hash (número digitado), o do processo com aquele número já aberto nesta busca,
+    no índice das caixas ou no cache. "" quando não se sabe: o número sozinho não dá endereço."""
+    base = base if base.endswith("/") else base + "/"
+    if hash_:
+        return f"{base}?pg=doc/ver&hash={hash_.upper()}&itd={itd}"
+    d = uni.por_numero.get(norm_numero(numero or "") or "") if uni is not None else None
+    if d is None:
+        return ""
+    if d.get("url"):
+        return d["url"]
+    return f"{base}?pg=doc/ver&hash={d['hash'].upper()}&itd={d.get('itd') or itd}" if d.get("hash") else ""
+
+
 def aceita_mencao(det: dict, outro: dict) -> bool:
     """Um processo que cita este, ou que este cita, conta como o novo processo dele quando a
     emissão não foi a normal ('a partir deste documento'): é Proc. Administrativo, não tem outra
@@ -1339,8 +1372,6 @@ def consolidar(item: dict | None, det: dict | None, agora: datetime, op, uni: Un
         "derivados": ", ".join(det.get("derivados") or []),
         "novos": novos,
         "novos_texto": texto_novos(novos),
-        "mencoes": texto_mencoes(det.get("citados") or [], det.get("pai", ""), [n["numero"] for n in novos],
-                                 (lambda c: (uni.achar(c) or {}).get("numero")) if uni else None),
         # o mais recente; com o filtro de período, o mais recente dentro dele (ver montar_filtros)
         "novo_processo_em": max((n["data"] for n in novos if n["data"]), default=None),
         "caixa": item.get("caixa", ""),
@@ -1349,6 +1380,13 @@ def consolidar(item: dict | None, det: dict | None, agora: datetime, op, uni: Un
         "tem_detalhe": bool(det),
         "_obs": [x for x in (det.get("atipico"), det.get("entrada_obs")) if x],
     }
+    # Coluna Menções e o link da célula (o do primeiro processo da lista)
+    base = getattr(op, "base", "") or BASE_PADRAO
+    itd = r["itd"] or "3"
+    r["mencoes"], r["mencoes_url"] = mencoes_e_link(
+        det.get("citados") or [], det.get("pai", ""), [n["numero"] for n in novos],
+        (lambda c: (uni.achar(c) or {}).get("numero")) if uni else None,
+        lambda n, h: endereco_citado(n, h, uni, base, itd))
     if det and not citados_atuais(det):
         r["_obs"].append("menções não lidas: detalhe gravado por versão anterior (rode com acesso ao 1Doc)")
     # Etapa reservada ao setor logado? (data-restrito_para_id_setor contém o id do setor da sessão)
@@ -1625,6 +1663,8 @@ def escrever_xlsx(caminho: str, regs: list[dict], params: list[tuple[str, str]],
                 c.alignment = Alignment(wrap_text=True, vertical="top")
             if campo == "numero" and r.get("url"):
                 c.hyperlink, c.font = r["url"], Font(color="0563C1", underline="single")
+            if campo == "mencoes" and v and r.get("mencoes_url"):  # leva ao primeiro processo da lista
+                c.hyperlink, c.font = r["mencoes_url"], Font(color="0563C1", underline="single")
     ws.auto_filter.ref = f"A1:{get_column_letter(len(cols))}{max(1, len(regs) + 1)}"
 
     wt = wb.create_sheet("Transições")
@@ -1986,7 +2026,9 @@ def executar(a, cli: Cliente1Doc | None, setor: str, agora: datetime) -> dict:
         ("Coluna Menções", "Todos os processos citados no texto de abertura e nos despachos deste — menção do "
                            "1Doc, link ou número com 'processo', 'nº'… antes —, mesmo quando não dá para dizer "
                            "se são o pai ou o filho. '(pai)': o processo de origem; '(filho)': um dos novos "
-                           "processos; '(número no texto)': citado só pelo número digitado."),
+                           "processos; '(número no texto)': citado só pelo número digitado. A célula leva ao "
+                           "primeiro processo da lista; o número digitado cujo processo não foi aberto (sem "
+                           "hash conhecido) fica no fim, sem link."),
         ("Dias", "Dias corridos de calendário até a data de posição."),
     ]
     return {"regs": regs, "falhas": falhas, "params": params, "filtros": filtros}

@@ -47,7 +47,8 @@ Menções: todos os processos citados no texto de abertura e nos despachos
 (menção do 1Doc, link ou número com "processo", "nº"… antes), mesmo
 quando não dá para dizer se são o pai ou o filho; "(pai)" é o processo de
 origem, "(filho)" o processo novo achado e "(número no texto)" o citado só
-pelo número digitado.
+pelo número digitado. A célula leva ao primeiro processo da lista; o número
+digitado cujo hash não se conhece fica no fim, sem link.
 Se houver processos excluídos só por citarem cancelamento, vão para a aba
 "Cancelados (conferir)", com o trecho da menção. Se não houver nem
 faltantes nem cancelados, nenhum arquivo é gerado. O resumo do terminal mostra
@@ -1192,7 +1193,7 @@ def classificar(ctx, ln):
     num = ler_numero(ln["numero"])
     res = dict(ln, ano=num[2], url=url_detalhe(ln["hash"]), situacao=ERRO,
                objeto="", etapa="", secretaria="", ult_data="", ult_texto="",
-               obs="", origem_num="", novos=[], mencoes="", mencoes_url="")
+               obs="", origem_num="", novos=[], mencoes="", mencoes_url="", hashes_conhecidos={})
     # Já passou da Pesquisa numa execução anterior: estado terminal (as marcas
     # de tempo das etapas percorridas não somem, então "retornou" continua
     # SIM). Evita reabrir centenas de arquivados a cada execução.
@@ -1264,8 +1265,10 @@ def classificar(ctx, ln):
                                                  posicao_cancelamento(desp_cancel["texto"])))
         return res
 
-    _o_hash, o_num = ler_origem(html)
+    o_hash, o_num = ler_origem(html)
     res["origem_num"] = o_num or ""
+    if o_hash and o_num:
+        res["hashes_conhecidos"][o_num] = o_hash
     anotar_mencoes(ctx, res, citados)
     if o_num and o_num in ctx.planilha:
         res.update(situacao=VINCULADO, obs=f"Emitido a partir de {o_num}, que está na planilha")
@@ -1275,7 +1278,10 @@ def classificar(ctx, ln):
         novos = buscar_novos(ctx, res, html)
         todos = []
         for n in novos:
-            todos += [n["numero"]] + ([n["via"]["numero"]] if n["via"] else [])
+            for x in (n, n["via"]):
+                if x:
+                    todos.append(x["numero"])
+                    res["hashes_conhecidos"][x["numero"]] = x["hash"]
         res["novos"] = todos
         anotar_mencoes(ctx, res, citados)
         na_pl = [n for n in todos if n in ctx.planilha]
@@ -1309,7 +1315,9 @@ def anotar_mencoes(ctx, res, citados):
     """Coluna Menções: os processos citados na página, com (pai) para a
     origem e (filho) para o processo novo achado, se já se sabe. Link sem
     número no texto vira número pelo cache, quando o hash já foi localizado
-    antes; o link da célula leva à primeira menção."""
+    antes. O link da célula é o do primeiro processo da lista (ver
+    busca.itens_mencoes): o do próprio link da menção e, no número digitado,
+    o do hash já conhecido daquele número (origem, processo novo ou cache)."""
     por_hash = None
 
     def achar(c):
@@ -1318,8 +1326,27 @@ def anotar_mencoes(ctx, res, citados):
             with ctx.lock_cache:
                 por_hash = {v: k for k, v in ctx.cache.items() if isinstance(v, str) and ler_numero(k)}
         return por_hash.get(c["hash"])
-    res["mencoes"] = busca.texto_mencoes(citados, res.get("origem_num", ""), res.get("novos") or [], achar)
-    res["mencoes_url"] = next((url_detalhe(c["hash"]) for c in citados if c["hash"]), "")
+
+    def endereco(numero, h):
+        h = h or hash_conhecido(ctx, numero, res.get("hashes_conhecidos"))
+        return url_detalhe(h) if h else ""
+    res["mencoes"], res["mencoes_url"] = busca.mencoes_e_link(
+        citados, res.get("origem_num", ""), res.get("novos") or [], achar, endereco)
+
+
+_RE_SO_HASH = re.compile(r"[0-9A-Fa-f]{16,40}")
+
+
+def hash_conhecido(ctx, numero, conhecidos=None):
+    """Hash do processo `numero` que já se sabe: lido nesta página (origem,
+    processo novo) ou guardado no cache ao localizá-lo. None se não se sabe."""
+    if not numero:
+        return None
+    h = (conhecidos or {}).get(numero)
+    if not h:
+        with ctx.lock_cache:
+            h = ctx.cache.get(numero)
+    return h.upper() if isinstance(h, str) and _RE_SO_HASH.fullmatch(h) else None
 
 
 def deduplicar(faltantes):

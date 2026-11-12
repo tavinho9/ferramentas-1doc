@@ -205,6 +205,51 @@ def test_texto_mencoes():
     assert busca.texto_mencoes([]) == ""
 
 
+def test_mencoes_link_do_primeiro_da_lista():
+    """O link da célula Menções é o do primeiro processo da lista. Antes era o da primeira citação
+    com hash: com o número digitado antes do link, a célula mostrava um processo e abria outro."""
+    from ferramentas1doc import busca
+    citados = [{"numero": "28.000/2026", "hash": "", "fonte": "texto"},       # hash não conhecido
+               {"numero": "30.161/2026", "hash": "", "fonte": "texto"},       # hash conhecido
+               {"numero": "", "hash": "5476d715a594730a44c8", "fonte": "link"},
+               {"numero": "39.144/2026", "hash": "AB02AAAA0000000000BB", "fonte": "mencao"}]
+    conhecidos = {"30.161/2026": "3016AAAA0000000000CC"}
+
+    def endereco(n, h):
+        h = h or conhecidos.get(n)
+        return f"https://x/?pg=doc/ver&hash={h}" if h else ""
+    achar = {"5476D715A594730A44C8": "26.831/2026"}.get
+    itens = busca.itens_mencoes(citados, "", ["39.144/2026"], lambda c: achar(c["hash"].upper()), endereco)
+    # cada processo com o próprio endereço, na ordem da página; o número sem hash conhecido no fim
+    assert itens == [
+        ("30.161/2026 (número no texto)", "https://x/?pg=doc/ver&hash=3016AAAA0000000000CC"),
+        ("26.831/2026", "https://x/?pg=doc/ver&hash=5476D715A594730A44C8"),
+        ("39.144/2026 (filho)", "https://x/?pg=doc/ver&hash=AB02AAAA0000000000BB"),
+        ("28.000/2026 (número no texto)", "")]
+    texto, url = busca.mencoes_e_link(citados, "", ["39.144/2026"], lambda c: achar(c["hash"].upper()), endereco)
+    assert texto.startswith("30.161/2026 (número no texto), 26.831/2026") and url.endswith("3016AAAA0000000000CC")
+    # sem endereço nenhum: a ordem da página e nenhum link
+    assert busca.mencoes_e_link(citados[:2]) == ("28.000/2026 (número no texto), 30.161/2026 (número no texto)", "")
+    assert busca.mencoes_e_link([]) == ("", "")
+
+
+def test_endereco_citado_na_busca():
+    """Busca: o hash do link dá o endereço; o número digitado, o do processo já aberto com ele."""
+    from ferramentas1doc import busca
+    uni = busca.Universo([{"numero": "30.161/2026", "hash": "3016AAAA0000000000CC",
+                           "url": "https://b/?pg=doc/ver&hash=3016AAAA0000000000CC&itd=3"},
+                          {"numero": "30.162/2026", "hash": "3016BBBB0000000000DD", "itd": "24"}])
+    base = "https://montesclaros.1doc.com.br"
+    assert busca.endereco_citado("", "ab02aaaa", uni, base, "3") == \
+        "https://montesclaros.1doc.com.br/?pg=doc/ver&hash=AB02AAAA&itd=3"
+    assert busca.endereco_citado("30.161/2026", "", uni, base, "3") == \
+        "https://b/?pg=doc/ver&hash=3016AAAA0000000000CC&itd=3"
+    assert busca.endereco_citado("30.162/2026", "", uni, base, "3") == \
+        "https://montesclaros.1doc.com.br/?pg=doc/ver&hash=3016BBBB0000000000DD&itd=24"
+    assert busca.endereco_citado("30.163/2026", "", uni, base, "3") == ""
+    assert busca.endereco_citado("30.161/2026", "", None, base, "3") == ""
+
+
 def _det(numero, assunto, emissao, pai="", tipo_doc="Proc. Administrativo", citados=(), hash_=""):
     return {"numero": numero, "tipo_doc": tipo_doc, "quadro": assunto, "tipo": assunto, "pai": pai,
             "emissao": emissao, "citados": [{"numero": c, "hash": ""} for c in citados], "hash": hash_,
