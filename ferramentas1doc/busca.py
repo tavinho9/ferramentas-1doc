@@ -61,7 +61,7 @@ try:
     import requests
     from requests.adapters import HTTPAdapter
     from urllib3.util.retry import Retry
-    from bs4 import BeautifulSoup, Comment, NavigableString
+    from bs4 import BeautifulSoup, CData, Comment, NavigableString, Tag
 except ImportError as _e:  # pragma: no cover
     sys.exit(f"Dependência ausente ({_e.name}). Instale: pip install websocket-client requests beautifulsoup4 openpyxl")
 
@@ -98,8 +98,9 @@ RE_LINK_OUTRO_DOC = re.compile(r"^(memorando|oficio|parecer|circular|despacho|de
 MAX_CITADOS = 40
 # Versão da leitura das citações gravada no detalhe ("citados_v"). Detalhe sem ela, ou com uma
 # anterior, é reaberto com acesso ao 1Doc. 2: menções do 1Doc (data-mention) em qualquer lugar da
-# página e a fonte de cada citação.
-CITADOS_VERSAO = 2
+# página e a fonte de cada citação. 3: a menção a uma pessoa não conta como link para processo, e
+# o número partido pela formatação do editor é lido inteiro (ver texto_corrido).
+CITADOS_VERSAO = 3
 # De onde veio a citação, da mais confiável para a menos (ver _citados), e como aparece na planilha
 FONTES_CITACAO = ("mencao", "link", "texto")
 ROTULO_FONTE = {"mencao": "menção do 1Doc", "link": "link no texto", "texto": "número no texto"}
@@ -639,6 +640,48 @@ def _despachos(soup) -> list[dict]:
     return out
 
 
+# Elementos que o navegador mostra na mesma linha do texto em volta. O editor do 1Doc às vezes parte
+# um número com eles (40.<span>001/2026</span>, <b>40.</b>001/2026); lido com espaço entre os
+# pedaços, ficava "40. 001/2026" e virava a citação 1/2026, que não existe na página.
+EM_LINHA = frozenset("a abbr b bdi bdo cite code data del dfn em font i ins kbd label mark q s samp "
+                     "small span strike strong sub sup time tt u var".split())
+
+
+def texto_corrido(el) -> str:
+    """Texto de `el` como o navegador mostra: um elemento em linha (span, b, a…) continua o texto do
+    lado, sem espaço; os demais (div, p, br, td…) separam com um espaço. Como no get_text, ficam de
+    fora comentários e o conteúdo de script, style e template."""
+    partes = []
+
+    def andar(no):
+        for f in no.children:
+            if isinstance(f, Tag):
+                if f.name in ("script", "style", "template"):
+                    continue
+                bloco = f.name not in EM_LINHA
+                if bloco:
+                    partes.append(" ")
+                andar(f)
+                if bloco:
+                    partes.append(" ")
+            elif type(f) in (NavigableString, CData):
+                partes.append(str(f))
+
+    andar(el)
+    return "".join(partes)
+
+
+def mencao_de_outro_tipo(a) -> bool:
+    """Menção do 1Doc que não é a um documento: a uma pessoa (data-mention="1", o @ do despacho) ou
+    de outro tipo. O href dela não leva ao mencionado: é o endereço da página que quem escreveu
+    tinha aberta (com o origem=painel_setor&caixa=… da caixa dele), em geral a do processo em que o
+    texto foi escrito. Colado em outro processo, parecia um link para aquele."""
+    tipo = a.get("data-mention")
+    if tipo is not None:
+        return str(tipo).strip() != "2"
+    return any(re.fullmatch(r"mention_\d+", c) and c != "mention_2" for c in a.get("class") or [])
+
+
 def _citados(soup, proprio_numero: str | None, proprio_hash: str) -> list[dict]:
     """Outros processos mencionados neste, de três fontes, da mais confiável para a menos:
       - "mencao": a menção do 1Doc, escolhida na lista ao escrever o despacho. Vem como
@@ -646,7 +689,8 @@ def _citados(soup, proprio_numero: str | None, proprio_hash: str) -> list[dict]:
         tanto no corpo do despacho (class "mention label mention_2") quanto na lista de
         documentos mencionados (class "pre_visualizar"). Lida em qualquer lugar da página;
       - "link": outro link para documento dentro do texto de abertura e dos despachos
-        (blocos .texto_original), com o número quando o texto do link o traz;
+        (blocos .texto_original), com o número quando o texto do link o traz. A menção a uma
+        pessoa fica de fora (ver mencao_de_outro_tipo);
       - "texto": número NN.NNN/AAAA digitado nesses blocos, com contexto de processo antes
         ("processo", "abertura", "nº"…) e sem contexto de lei, requisição, contrato etc.
     Não filtra por ano: o mesmo registro serve para os dois sentidos (este cita o novo; o novo
@@ -677,9 +721,11 @@ def _citados(soup, proprio_numero: str | None, proprio_hash: str) -> list[dict]:
         de_link(a, "mencao")
     for bloco in soup.find_all(class_=lambda c: bool(c) and "texto_original" in str(c).split()):
         for a in bloco.select("a[href]"):
+            if mencao_de_outro_tipo(a):
+                continue
             if (parse_qs(urlparse(a["href"]).query).get("hash") or [""])[0]:
                 de_link(a, "link")
-        texto = bloco.get_text(" ")
+        texto = texto_corrido(bloco)
         for m in RE_NUM_LIVRE.finditer(texto):
             n = norm_numero(f"{m[1]}/{m[2]}")
             antes = norm_contexto(texto[max(0, m.start() - 45):m.start()])

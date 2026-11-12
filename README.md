@@ -111,7 +111,12 @@ no texto de abertura e nos despachos (menção do 1Doc, link ou número com
 "processo", "nº"… antes), mesmo quando não dá para dizer se são o processo
 pai ou o filho. *(pai)* marca o processo de origem, *(filho)* o processo novo
 achado e *(número no texto)* o citado só pelo número digitado; a célula leva
-à primeira menção. A primeira *Busca* depois de atualizar reabre os processos
+à primeira menção. Um link cujo texto não traz o número (um "clique aqui")
+aparece com o número do processo quando o hash dele já está no cache, e como
+*link ABCD…* quando não está: na página só há o hash. A menção a uma pessoa (o @ do despacho) não conta: o link dela leva à
+página que quem escreveu tinha aberta, não a um processo. O número partido
+pela formatação do editor (`40.<span>001/2026</span>`) é lido inteiro, como o
+navegador mostra. A primeira *Busca* depois de atualizar reabre os processos
 guardados no cache por versão anterior, para ler as menções; no `--offline`,
 eles saem com "menções não lidas" na *Observação*.
 

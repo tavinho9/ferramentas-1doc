@@ -750,7 +750,10 @@ _RE_EH_MENCAO = re.compile(r"""\bdata-mention\s*=\s*["']?2\b|\bmention_2\b""", r
 def citacoes(html, proprio):
     """Candidatos citados nos despachos: ([hashes de links], [números]).
     As menções do 1Doc (data-mention="2") vêm primeiro e valem em qualquer
-    lugar da página; depois, os links e os números dos blocos .texto_original."""
+    lugar da página; depois, os links e os números dos blocos .texto_original.
+    A menção a uma pessoa (data-mention="1") não é link para processo: o href
+    dela é a página que quem escreveu tinha aberta. O texto é lido como o
+    navegador mostra, para o número partido pela formatação sair inteiro."""
     from bs4 import SoupStrainer
     # Função, não texto: no bs4 4.13+ o SoupStrainer(class_="texto_original")
     # compara a string de classe inteira e perde <div class="texto_original fr-view">.
@@ -763,10 +766,12 @@ def citacoes(html, proprio):
         if h and h not in hashes:
             hashes.append(h)
     for a in blocos.select("a[href]"):
+        if busca.mencao_de_outro_tipo(a):
+            continue
         h = hash_de(a["href"])
         if h and h not in hashes:
             hashes.append(h)
-    texto = blocos.get_text(" ")
+    texto = busca.texto_corrido(blocos)
     for m in _RE_NUMERO.finditer(texto):
         num = ler_numero(m.group())
         if not num or num[0] == proprio["numero"] or int(num[2]) < ano_min:
@@ -907,8 +912,12 @@ def buscar_novos(ctx, elab, html, nivel=1):
     hash). Lista de dicts: numero, hash, url, veredito, etapa, obs, vinculo."""
     achados, vistos = [], {elab["hash"]}
     chave_cache = f"novo:{elab['numero']}"
+    hashes, numeros = citacoes(html, elab)
 
     def avaliar_candidato(h, pagina, citado):
+        """`citado=None`: candidato guardado no cache. Vale como citado só se
+        ainda for citado na página, para não repetir um vínculo achado por uma
+        leitura que já foi corrigida (ex.: menção a uma pessoa)."""
         if h in vistos:
             return
         vistos.add(h)
@@ -918,6 +927,8 @@ def buscar_novos(ctx, elab, html, nivel=1):
             return
         if not _norm(nome_em).startswith("proc administrativo"):
             return                       # memorando, parecer, ofício… emitido do processo
+        if citado is None:
+            citado = h in hashes or nome[0] in numeros
         origem_hash, origem_num = ler_origem(pagina)
         if origem_hash == elab["hash"] or origem_num == elab["numero"]:
             vinculo = "origem no 1Doc"
@@ -958,7 +969,7 @@ def buscar_novos(ctx, elab, html, nivel=1):
             avaliar_candidato(r[0], r[1], citado)
 
     for numero in ctx.cache.get(chave_cache, []):
-        por_numero(numero, citado=True)
+        por_numero(numero, citado=None)
     # "É base de" / "emitiu o … a partir deste documento": a própria página
     # lista os filhos; cada um ainda é conferido pelo cabeçalho de origem.
     for h, _num, _rot in ler_filhos(html):
@@ -968,7 +979,6 @@ def buscar_novos(ctx, elab, html, nivel=1):
     # abertura (ou cadeia que não chega a uma) não basta: a abertura pode ter
     # sido emitida de outro jeito e só o índice a acha.
     confirmado = any(a["vinculo"] == "origem no 1Doc" and _tem_abertura(a) for a in achados)
-    hashes, numeros = citacoes(html, elab)
     for h in hashes:
         por_hash(h, citado=True)
     for numero in numeros:
