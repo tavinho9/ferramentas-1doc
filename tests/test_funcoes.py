@@ -396,6 +396,17 @@ def test_citacoes_numero_partido_pela_formatacao(modulo, numero):
     assert modulo.citacoes(html, {"numero": "1/2026", "ano": "2026"}) == ([], ["40.001/2026"])
 
 
+# Data no despacho, com contexto de processo antes: o 11/2026 de "12/11/2026" não é um processo.
+DESPACHO_COM_DATAS = ('<div class="texto_original fr-view">Recebido no dia 12/11/2026 e autuado em '
+                      '1/11/2026; segue o processo nº 40.001/2026 e o nº 3/2026.</div>')
+
+
+@pytest.mark.parametrize("modulo", [faltantes, verificar_planilha])
+def test_citacoes_data_nao_vira_processo(modulo):
+    assert modulo.citacoes(DESPACHO_COM_DATAS, {"numero": "1/2026", "ano": "2026"}) == (
+        [], ["40.001/2026", "3/2026"])
+
+
 def test_texto_corrido():
     """Em linha, o texto continua; bloco, quebra de linha e célula separam. Comentário e script
     ficam de fora, como no get_text."""

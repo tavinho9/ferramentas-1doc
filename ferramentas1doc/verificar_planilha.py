@@ -772,7 +772,9 @@ def citacoes(html, proprio):
         if h and h not in hashes:
             hashes.append(h)
     texto = busca.texto_corrido(blocos)
-    for m in _RE_NUMERO.finditer(texto):
+    # A regra da Busca: sem dígito, "/" ou "." logo antes, para a data
+    # ("no dia 12/11/2026") não virar o processo 11/2026.
+    for m in busca.RE_NUM_LIVRE.finditer(texto):
         num = ler_numero(m.group())
         if not num or num[0] == proprio["numero"] or int(num[2]) < ano_min:
             continue
