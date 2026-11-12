@@ -223,6 +223,12 @@ def test_busca_novo_processo_por_mencao(dados, cred, monkeypatch):
         ("30.500/2026", "41.000/2026", "cita este", "número no texto", "Validação de Requisição"),
         ("30.600/2026", "39.144/2026", "citado neste", "menção do 1Doc", "Validação de Requisição")]
     assert "hash=AB02AAAA0000000000BB" in load_workbook(saida)["Novos processos"]["C3"].hyperlink.target
+    # a célula Menções leva ao processo citado (antes ficava sem link na Busca)
+    resultado = load_workbook(saida)["Resultado"]
+    col = next(c.column_letter for c in resultado[1] if c.value == "Menções")
+    assert resultado[f"{col}3"].value == "39.144/2026 (filho)"
+    assert "hash=AB02AAAA0000000000BB" in resultado[f"{col}3"].hyperlink.target
+    assert resultado[f"{col}2"].hyperlink is None                        # sem menção, sem link
     params = dict(res["params"])
     assert "(emissão normal ou menção)" in params["Filtros"]
     # 5 da família em Em aberto (já abertos pela busca) e 2 aberturas nos Arquivados; o pagamento fica de fora
@@ -313,6 +319,21 @@ def test_faltantes(dados, cred, monkeypatch):
     assert set(fake.intervalos) == {f"01/01/2026 - {date.today():%d/%m/%Y}"}
 
 
+def test_faltantes_mencao_so_por_numero(dados, cred, monkeypatch):
+    """Número digitado no despacho, sem link nenhum: a célula Menções leva ao primeiro processo
+    da lista pelo hash que já se conhece (aqui, o do pai, no cabeçalho). O número sem hash
+    conhecido fica no fim."""
+    h = "DDDD3333EEEE4444FFFF"
+    monkeypatch.setitem(fake1doc.PROCESSOS[h], "despacho",
+                        "Ver o processo nº 30.161/2026. Origem: Proc. Administrativo 28.000/2026.")
+    monkeypatch.setitem(fake1doc.PROCESSOS[h], "pai", ("28.000/2026", "2800AAAA0000000000EE"))
+    faltantes, _fake = _preparar_faltantes(dados, monkeypatch)
+    destino = faltantes.executar(_planilha(dados["dados"] / "acomp.xlsx", ["31.632/2026"]), None, cred)
+    ws = load_workbook(destino)["Faltantes"]
+    assert ws["I2"].value == "28.000/2026 (pai; número no texto), 30.161/2026 (número no texto)"
+    assert "hash=2800AAAA0000000000EE" in ws["I2"].hyperlink.target
+
+
 def test_faltantes_periodo_escolhido(dados, cred, monkeypatch):
     faltantes, fake = _preparar_faltantes(dados, monkeypatch)
     planilha = _planilha(dados["dados"] / "acomp.xlsx", ["31.632/2026"])
@@ -375,6 +396,24 @@ def test_verificar_planilha(dados, cred, monkeypatch):
     assert linhas[1][9] == "Aquisição de medicamentos para a rede municipal de saúde"
     cache = json.load(open(verificar_planilha.ARQ_CACHE, encoding="utf-8"))
     assert cache["31.632/2026"] == "AAAA1111BBBB2222CCCC"       # localizado por HTTP e guardado
+
+
+def test_verificar_planilha_mencao_antes_do_link(dados, cred, monkeypatch):
+    """O número digitado vem antes do link na página: antes, a célula mostrava o número primeiro
+    e abria o processo do link. Agora o link da célula é sempre o do primeiro da lista."""
+    from ferramentas1doc import verificar_planilha
+    h = "AAAA1111BBBB2222CCCC"
+    monkeypatch.setitem(fake1doc.PROCESSOS[h], "despacho",
+                        'Ver o processo nº 30.161/2026.</div><div class="texto_original">Segue '
+                        '<a href="./?pg=doc/ver&amp;hash=5476D715A594730A44C82DCD">neste link</a>.')
+    monkeypatch.setattr(verificar_planilha, "PAUSA_REQ", 0)
+    monkeypatch.setattr(verificar_planilha, "ARQ_CACHE",
+                        os.path.join(str(dados["dados"]), "hash_cache_1doc.json"))
+    fake1doc.instalar(monkeypatch)
+    planilha = _planilha(dados["dados"] / "acomp.xlsx", ["31.632/2026"])
+    ws = load_workbook(verificar_planilha.executar(planilha, "Acompanhamento", cred)).active
+    assert ws["I2"].value == "link 5476D715A5…, 30.161/2026 (número no texto)"
+    assert "hash=5476D715A594730A44C82DCD" in ws["I2"].hyperlink.target
 
 
 def test_planilha_inexistente(dados, cred):

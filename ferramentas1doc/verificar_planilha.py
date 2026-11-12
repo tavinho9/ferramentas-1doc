@@ -32,7 +32,9 @@ passaram dela:
       despachos (menção do 1Doc, link ou número com "processo", "nº"…
       antes), mesmo quando não dá para dizer se são o pai ou o filho;
       "(pai)" e "(filho)" marcam os que estão nas colunas ao lado e
-      "(número no texto)" o citado só pelo número digitado
+      "(número no texto)" o citado só pelo número digitado. A célula leva
+      ao primeiro processo da lista; o número digitado cujo hash não se
+      conhece fica no fim, sem link
     - Objeto (abertura): campo adicional "Objeto" (descricao_objeto) do
       processo de abertura (fluxo com a Pesquisa de Mercado ou etiqueta
       "Abertura de Procedimento Licitatório"): o PRÓPRIO processo da linha,
@@ -1024,6 +1026,10 @@ def aplicar_novo_processo(ctx, res, html):
     """Transfere para a linha da elaboração o veredito do processo novo."""
     novos = buscar_novos(ctx, res, html)
     res["novos"] = [n["numero"] for n in novos]
+    for n in novos:                     # hashes para o link da coluna Menções
+        while n:
+            res["hashes_novos"][n["numero"]] = n["hash"]
+            n = n.get("via")
     if not novos:
         res["obs"] += " — nenhum novo processo emitido encontrado"
         return
@@ -1101,11 +1107,19 @@ def abrir(ctx, item, link=None):
 def anotar_mencoes(ctx, res, citados):
     """Coluna Menções: os processos citados na página, com (pai) e (filho)
     para os que já estão nas colunas ao lado. Link sem número no texto vira
-    número pelo cache, quando o hash já foi localizado antes; o link da célula
-    leva à primeira menção."""
+    número pelo cache, quando o hash já foi localizado antes. O link da
+    célula é o do primeiro processo da lista (ver busca.itens_mencoes): o do
+    próprio link da menção e, no número digitado, o do hash já conhecido
+    daquele número (pai, filho, processo novo ou cache)."""
     filhos = [f["numero"] for f in res["filhos"]] + list(res["novos"])
     if res.get("cadeia"):
         filhos += [x.strip() for x in res["cadeia"].split("→")]
+    # hashes lidos nesta página: o do pai (cabeçalho), os de "É base de" e os dos processos novos
+    conhecidos = {f["numero"]: f["hash"] for f in res["filhos"] if f.get("hash")}
+    conhecidos.update(res.get("hashes_novos") or {})
+    pai = res.get("pai") or {}
+    if pai.get("numero") and hash_de(pai.get("url") or ""):
+        conhecidos[pai["numero"]] = hash_de(pai["url"])
     por_hash = None
 
     def achar(c):
@@ -1114,13 +1128,34 @@ def anotar_mencoes(ctx, res, citados):
             with ctx.lock_cache:
                 por_hash = {v: k for k, v in ctx.cache.items() if isinstance(v, str) and ler_numero(k)}
         return por_hash.get(c["hash"])
-    res["mencoes"] = busca.texto_mencoes(citados, (res.get("pai") or {}).get("numero", ""), filhos, achar)
-    res["mencoes_url"] = next((url_detalhe(c["hash"]) for c in citados if c["hash"]), "")
+
+    def endereco(numero, h):
+        h = h or hash_conhecido(ctx, numero, conhecidos)
+        return url_detalhe(h) if h else ""
+    res["mencoes"], res["mencoes_url"] = busca.mencoes_e_link(
+        citados, pai.get("numero", ""), filhos, achar, endereco)
+
+
+_RE_SO_HASH = re.compile(r"[0-9A-Fa-f]{16,40}")
+
+
+def hash_conhecido(ctx, numero, conhecidos=None):
+    """Hash do processo `numero` que já se sabe: lido nesta página (pai,
+    filho, processo novo) ou guardado no cache ao localizá-lo. None se não
+    se sabe."""
+    if not numero:
+        return None
+    h = (conhecidos or {}).get(numero)
+    if not h:
+        with ctx.lock_cache:
+            h = ctx.cache.get(numero)
+    return h.upper() if isinstance(h, str) and _RE_SO_HASH.fullmatch(h) else None
 
 
 def processar(ctx, item):
     res = dict(item, hash=None, url="", veredito=INDET, etapa="", obs="", fonte="",
-               elaboracao=False, novos=[], novo=None, pai=None, filhos=[], mencoes="", mencoes_url="")
+               elaboracao=False, novos=[], novo=None, pai=None, filhos=[], mencoes="", mencoes_url="",
+               hashes_novos={})
     achado = abrir(ctx, item, item["link_planilha"])
     if achado is None:
         res["obs"] = "Processo não localizado no 1Doc"
