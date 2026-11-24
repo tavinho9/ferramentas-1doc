@@ -27,7 +27,9 @@ hoje; ver PERÍODO DE EMISSÃO), que:
          emitido a partir dele, se houver, também não chegou a ela;
   4. o(s) último(s) despacho(s) (N_ULTIMOS_DESPACHOS) NÃO mencionam
      cancelamento (cancelar, cancelado, cancelamento...). Sem despacho,
-     vale o texto de abertura do processo.
+     vale o texto de abertura do processo. O despacho que o 1Doc cancelou e
+     o aviso desse cancelamento ("Proc. Administrativo 7-41.039/2026
+     cancelado por…") não contam: falam do despacho, não do processo.
 Elaboração parada na "Etapa Final" sem processo novo encontrado sai como
 concluída (EXCLUIR_ETAPA_FINAL_SEM_NOVO).
 As caixas incluem Arquivados: o setor arquiva elaborações e fases
@@ -653,8 +655,9 @@ _RE_ORIGEM = re.compile(r"""class\s*=\s*["'][^"']*\bemission_infos_item_from\b""
 _RE_ID_EMISSAO = re.compile(
     r"""<input\b[^>]*\bname\s*=\s*["']id_emissao_pai["'][^>]*\bvalue\s*=\s*["'](\d+)["']""", re.I)
 _RE_CTX_SIM = re.compile(r"(proc|abertura|emitid|gerad|autuad|instaurad|\bn[o]?\b|numero)")
+# "processo licitatório" tem numeração própria da licitação (ver busca.RE_CTX_OUTRO_DOC)
 _RE_CTX_NAO = re.compile(r"(lei|decreto|portaria|requisi|\brc\b|contrato|\bata\b|edital|pregao|"
-                         r"oficio|memorando|resolucao|instrucao|acordao|cnpj|cpf)")
+                         r"oficio|memorando|resolucao|instrucao|acordao|cnpj|cpf|processo licitatori)")
 
 
 def ler_origem(html):
@@ -1089,13 +1092,33 @@ def ler_secretaria(html):
     return primeiro or ""
 
 
+def despacho_cancelado(tabela):
+    """O table.despacho é um despacho que o 1Doc cancelou? Ele continua na
+    linha do tempo, recolhido num div.canceled-accordion-group, com o
+    cabeçalho .rf_header_canceled_emission; a classe da tabela vem colada na
+    anterior ("table-borderedtable_emission_canceled"). As duas marcas ficam
+    dentro da tabela: valem mesmo lendo só as tabelas da página."""
+    return (any("emission_canceled" in c for c in tabela.get("class") or [])
+            or tabela.select_one(".rf_header_canceled_emission") is not None)
+
+
+def aviso_de_cancelamento(tabela):
+    """O table.despacho é o aviso que o 1Doc publica ao cancelar outro
+    despacho: "Proc. Administrativo 7-41.039/2026 cancelado por Fulano, com a
+    seguinte justificativa: …" (o 7- é o número do despacho)? O aviso fala
+    do despacho, não do processo."""
+    return tabela.select_one(".motivo-cancelamento") is not None
+
+
 def ler_despachos(html):
     """Despachos em ordem cronológica: [{'rotulo', 'data', 'texto'}].
     Cada despacho é um table.despacho, em ordem cronológica na página;
     o texto vem do td.celula_despacho por textContent, sem o menu de ações
     (que tem 'Solicitar/Assinar...' e não é conteúdo), mais valores de
-    textarea e title/data-original-title. Sem despacho nenhum, devolve o
-    texto de abertura do processo como único item."""
+    textarea e title/data-original-title. Ficam de fora o despacho cancelado
+    e o aviso do cancelamento: o "cancelado" do aviso não é o do processo, e
+    nenhum dos dois é o último despacho que vale. Sem despacho nenhum, devolve
+    o texto de abertura do processo como único item."""
     from bs4 import SoupStrainer
     # Filtra a classe em Python: no bs4 4.13+ o SoupStrainer(class_=...) não
     # casa atributo class com vários valores ("relative despacho ...").
@@ -1103,6 +1126,8 @@ def ler_despachos(html):
     itens = []
     for t in soup.find_all("table"):
         if "despacho" not in (t.get("class") or []):
+            continue
+        if despacho_cancelado(t) or aviso_de_cancelamento(t):
             continue
         cel = t.select_one("td.celula_despacho")
         if cel is None:

@@ -101,7 +101,9 @@ mais confiável para a menos: *menção do 1Doc* (o processo escolhido na lista
 ao escrever o despacho, que a página marca com `data-mention="2"`, no texto e
 na lista de documentos mencionados), *link no texto* ou *número no texto*
 (um número NN.NNN/AAAA digitado, com "processo", "nº", "abertura"… antes e
-sem "lei", "requisição", "contrato"…). Vale conferir primeiro as que vieram
+sem "lei", "requisição", "contrato", "pregão", "processo licitatório"…: o
+pregão e o processo licitatório têm numeração própria da licitação, como em
+"PROCESSO LICITATÓRIO número 449/2026"). Vale conferir primeiro as que vieram
 só do número digitado. O *Faltantes* e o *Verificar planilha* também passam
 a usar a menção do 1Doc para achar o processo novo.
 

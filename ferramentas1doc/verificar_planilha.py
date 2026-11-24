@@ -677,8 +677,9 @@ def sem_etapa_corte(etapas):
 
 _RE_ORIGEM = re.compile(r"""class\s*=\s*["'][^"']*\bemission_infos_item_from\b""", re.I)
 _RE_CTX_SIM = re.compile(r"(proc|abertura|emitid|gerad|autuad|instaurad|\bn[o]?\b|numero)")
+# "processo licitatório" tem numeração própria da licitação (ver busca.RE_CTX_OUTRO_DOC)
 _RE_CTX_NAO = re.compile(r"(lei|decreto|portaria|requisi|\brc\b|contrato|\bata\b|edital|pregao|"
-                         r"oficio|memorando|resolucao|instrucao|acordao|cnpj|cpf)")
+                         r"oficio|memorando|resolucao|instrucao|acordao|cnpj|cpf|processo licitatori)")
 
 
 def ler_origem(html):

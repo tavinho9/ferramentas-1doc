@@ -90,17 +90,20 @@ RE_TOTAL_CAIXA = re.compile(r"""num_tab_(\w+)['"]\)\.html\(['"]\((\d[\d.]*)\)"""
 RE_DERIVADO = re.compile(r"emitiu\s+o\s+(.+?)\s+([\d.]+/\d{4})\s+a partir deste documento", re.I)
 # Menção a outro processo no texto (abertura e despachos): número com contexto de processo logo
 # antes e sem contexto de lei, requisição, contrato etc. (a mesma regra do Faltantes/Verificar).
+# O "processo licitatório" tem numeração própria da licitação, como o pregão e o edital: na
+# formalização, "PROCESSO ADMINISTRATIVO DIGITAL 41.039/2026, PROCESSO LICITATÓRIO número 449/2026".
 RE_CTX_PROCESSO = re.compile(r"(proc|abertura|emitid|gerad|autuad|instaurad|\bn[o]?\b|numero)")
 RE_CTX_OUTRO_DOC = re.compile(r"(lei|decreto|portaria|requisi|\brc\b|contrato|\bata\b|edital|pregao|"
-                              r"oficio|memorando|resolucao|instrucao|acordao|cnpj|cpf)")
+                              r"oficio|memorando|resolucao|instrucao|acordao|cnpj|cpf|processo licitatori)")
 # Link de despacho para documento que não é processo (o texto do link diz o tipo)
 RE_LINK_OUTRO_DOC = re.compile(r"^(memorando|oficio|parecer|circular|despacho|decreto|portaria|anexo)")
 MAX_CITADOS = 40
 # Versão da leitura das citações gravada no detalhe ("citados_v"). Detalhe sem ela, ou com uma
 # anterior, é reaberto com acesso ao 1Doc. 2: menções do 1Doc (data-mention) em qualquer lugar da
 # página e a fonte de cada citação. 3: a menção a uma pessoa não conta como link para processo, e
-# o número partido pela formatação do editor é lido inteiro (ver texto_corrido).
-CITADOS_VERSAO = 3
+# o número partido pela formatação do editor é lido inteiro (ver texto_corrido). 4: o número do
+# "processo licitatório" (numeração da licitação) não é citação de processo do 1Doc.
+CITADOS_VERSAO = 4
 # De onde veio a citação, da mais confiável para a menos (ver _citados), e como aparece na planilha
 FONTES_CITACAO = ("mencao", "link", "texto")
 ROTULO_FONTE = {"mencao": "menção do 1Doc", "link": "link no texto", "texto": "número no texto"}
@@ -785,10 +788,20 @@ def forca_fonte(fonte: str) -> int:
     return FONTES_CITACAO.index(fonte) if fonte in FONTES_CITACAO else len(FONTES_CITACAO)
 
 
+RE_CORTE = re.compile(r"(?:\.\.\.|…)\s*$")
+
+
+def _sem_corte(rotulo: str) -> str:
+    """Rótulo do despacho sem o corte do 1Doc, para comparar com o quadro. O 1Doc corta em bytes,
+    não em letras: 'Termo de Autuação' chega como 'Termo de Autua\\xc3...', meia letra que vira
+    '\\ufffd' ao decodificar. Sai também esse pedaço."""
+    return normtxt(re.sub(r"(?:\.\.\.|…|�|\s)+$", "", rotulo or ""))
+
+
 def resolver_etapa(rotulo: str, titulos: list[str]) -> str:
     """O rótulo do despacho vem truncado ('Validação de ...'): casa por prefixo com o quadro."""
     r = (rotulo or "").strip()
-    base = normtxt(re.sub(r"(\.\.\.|…)\s*$", "", r)).strip()
+    base = _sem_corte(r)
     if not base:
         return r
     for t in titulos:
@@ -796,6 +809,16 @@ def resolver_etapa(rotulo: str, titulos: list[str]) -> str:
             return t
     cands = [t for t in titulos if normtxt(t).startswith(base)]
     return cands[0] if len(cands) == 1 else r
+
+
+def rotulo_compativel(rotulo: str, etapa: str) -> bool:
+    """O rótulo do despacho pode ser o da `etapa`? Cortado ('Parecer Jurídi...'), basta ser o
+    começo do nome, mesmo que outra etapa do quadro comece igual ('Parecer Jurídico Final');
+    inteiro, tem de ser o nome."""
+    base, alvo = _sem_corte(rotulo), normtxt(etapa)
+    if not base or not alvo:
+        return False
+    return alvo == base or (bool(RE_CORTE.search((rotulo or "").strip())) and alvo.startswith(base))
 
 
 def _transicoes(desp: list[dict], titulos: list[str], eventos: list[dict] | None = None,
@@ -818,12 +841,14 @@ def _transicoes_eventos(desp, titulos, eventos, emissao) -> list[dict]:
     for e in eventos:
         para = resolver_etapa(e["para"], titulos) if e["para"] else ""
         de = resolver_etapa(e["de"], titulos) if e["de"] else ""
-        # despacho 'via etapa' gravado no mesmo instante (até 2 min) e com rótulo da etapa de destino
+        # despacho 'via etapa' gravado no mesmo instante (até 2 min) e com rótulo da etapa de destino.
+        # O rótulo vem cortado e às vezes é o começo de duas etapas ('Parecer Jurídi...'); o destino
+        # do evento desempata.
         par = None
         for d in desp:
             dd = de_iso(d["data"])
             if dd and e["data"] and abs((dd - e["data"]).total_seconds()) <= 120 and d["rotulo_etapa"] \
-                    and normtxt(resolver_etapa(d["rotulo_etapa"], titulos)) == normtxt(para):
+                    and rotulo_compativel(d["rotulo_etapa"], para):
                 par = d
                 break
         out.append({"data": iso(e["data"]), "de": de, "para": para, "rotulo": par["rotulo_etapa"] if par else "",
